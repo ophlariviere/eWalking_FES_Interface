@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: pyScienceMode
+Version: 1.1
+Summary: Python interface to control the Rehastim2 and RehastimP24 devices.
+Home-page: https://github.com/s2mLab/pyScienceMode.git
+Author: S2M Lab
+Author-email: kevin.co@umontreal.ca

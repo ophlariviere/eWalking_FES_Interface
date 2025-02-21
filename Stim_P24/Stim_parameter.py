@@ -1,7 +1,7 @@
-from pysciencemode import Device, Modes, Channel
-from pysciencemode import RehastimP24 as St
+from pyScienceMode import Device, Modes, Channel
+from pyScienceMode import RehastimP24 as St
 import logging
-from Stim_Interface import StimInterfaceWidget
+from Stim_P24.Stim_Interface import StimInterfaceWidget
 
 
 class StimulatorSetUp:
@@ -17,7 +17,7 @@ class StimulatorSetUp:
     def activate_stimulateur(self):
         if self.stimulator is None:
             self.stimulator = St(port="COM3", show_log="Status")
-            self.stimulator_is_active = False
+            self.stimulator_is_active = True
 
     def start_stimulation(self, channel_to_send):
         try:

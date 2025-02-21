@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
 )
 import sys
 import logging
-from Stim_parameter import StimulatorSetUp
+from Stim_P24.Stim_parameter import StimulatorSetUp
 
 
 # Configurer le logging
