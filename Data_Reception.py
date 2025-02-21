@@ -36,7 +36,7 @@ class DataReceiver:
             # data recuperation
             headers, markers = packet.get_3d_markers()
             force_plates = packet.get_force()[1]
-            analog = packet.get_analog()
+            headeranalog, analog = packet.get_analog()
 
             dict_force = {f"plate_{plate.id}": forces
                           for plate, forces in force_plates}
@@ -49,6 +49,7 @@ class DataReceiver:
                 dict_footswitch = {
                     'footswitch_data': analog[1][15][2][0]
                 }
+
 
                 foot_switch_processor.gait_phase_detection(footswitch_data=analog[1][15][2][0])
 
