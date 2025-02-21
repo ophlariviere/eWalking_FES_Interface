@@ -1,12 +1,13 @@
 from pyScienceMode import Device, Modes, Channel
 from pyScienceMode import RehastimP24 as St
 import logging
-from Stim_P24.Stim_Interface import StimInterfaceWidget
+
 
 
 class StimulatorSetUp:
     def __init__(self):
         super().__init__()
+        from Stim_P24.Stim_Interface import StimInterfaceWidget
         self.stimulator = None
         self.stimulator_is_active = False
         self.stimulator_is_sending_stim = False
