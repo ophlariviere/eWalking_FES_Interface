@@ -1,7 +1,6 @@
-from pyScienceMode import Device, Modes, Channel
-from pyScienceMode import RehastimP24 as St
+from pysciencemode import Device, Modes, Channel
+from pysciencemode import RehastimP24 as St
 import logging
-
 
 
 class StimulatorSetUp:

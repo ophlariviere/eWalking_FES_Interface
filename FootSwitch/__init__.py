@@ -1,1 +1,2 @@
 from .FootSwitchDataProcess import FootSwitchDataProcessor
+from .FootSwitchEMGProcess import FootSwitchEMGProcessor
