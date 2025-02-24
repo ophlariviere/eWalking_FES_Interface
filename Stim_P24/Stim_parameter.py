@@ -14,7 +14,7 @@ class StimulatorSetUp:
         self.num_config = 0
         self.interface = StimInterfaceWidget
 
-    def activate_stimulateur(self):
+    def activate_stimulator(self):
         if self.stimulator is None:
             self.stimulator = St(port="COM3", show_log="Status")
             self.stimulator_is_active = True
@@ -23,7 +23,7 @@ class StimulatorSetUp:
         try:
             if self.stimulator is None:
                 logging.warning(
-                    "Stimulateur non initialisé. Veuillez le configurer avant de démarrer."
+                    "Stimulator non initialised. Please initialised stimulator before sending stim."
                 )
                 return
             channels_instructions = []
@@ -46,23 +46,23 @@ class StimulatorSetUp:
                 self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator_is_sending_stim = True
-                logging.info(f"Stimulation démarrée sur les canaux {channel_to_send}")
+                logging.info(f"Stimulation start on channel {channel_to_send}")
 
         except Exception as e:
-            logging.error(f"Erreur lors du démarrage de la stimulation : {e}")
+            logging.error(f"Error when sending stimulation : {e}")
 
     def pause_stimulation(self):
         try:
             if self.stimulator:
                 self.stimulator.end_stimulation()
                 self.stimulator_is_sending_stim = False
-                logging.info("Stimulation arrêtée.")
+                logging.info("Stimulation stopped.")
             else:
-                logging.warning("Aucun stimulateur actif à arrêter.")
+                logging.warning("No stimulator is active so stimulation can't be stopped.")
         except Exception as e:
-            logging.error(f"Erreur lors de l'arrêt de la stimulation : {e}")
+            logging.error(f"Error during stopping stimulation : {e}")
 
-    def stop_stimulateur(self):
+    def stop_stimulator(self):
         try:
             if self.stimulator:
                 self.pause_stimulation()
@@ -70,11 +70,11 @@ class StimulatorSetUp:
                 self.stimulator.close_port()
                 self.stimulator_is_active = False
                 self.stimulator = None
-                logging.info("Stimulateur arrêtée.")
+                logging.info("Stimulator stopped.")
             else:
-                logging.warning("Aucun stimulateur actif à arrêter.")
+                logging.warning("None stimulator to stopped.")
         except Exception as e:
-            logging.error(f"Erreur lors de l'arrêt de la stimulation : {e}")
+            logging.error(f"Error during stopping the stimulator : {e}")
 
     def update_stimulation_parameter(self):
         """Met à jour la stimulation."""
@@ -82,7 +82,7 @@ class StimulatorSetUp:
 
         if self.stimulator is not None:
             for channel, inputs in self.interface.channel_inputs.items():
-                # Vérifiez si le canal existe dans stimconfig, sinon, initialisez-le
+                # Check if channel exist yet, if not initialised it
                 if channel not in self.stimulator_parameters:
                     self.stimulator_parameters[channel] = {
                         "name": "",
@@ -93,7 +93,7 @@ class StimulatorSetUp:
                         "device_type": None,
                     }
 
-                # Mettez à jour les valeurs de configuration
+                # Upgrade stimulation parameters value
                 self.stimulator_parameters[channel]["name"] = inputs["name_input"].text()
                 self.stimulator_parameters[channel]["amplitude"] = inputs["amplitude_input"].value()
                 self.stimulator_parameters[channel]["pulse_width"] = inputs["pulse_width_input"].value()

@@ -9,15 +9,17 @@ foot_switch_emg_processor = FootSwitchEMGProcessor()
 
 class DataReceiver:
     def __init__(self, server_ip="192.168.254.1", port=7, system_rate=100, device_rate=2000):
-        # Paramètres
+        # Parameters
         self.server_ip = server_ip
         self.port = port
         self.system_rate = system_rate
         self.device_rate = device_rate
         self.interface = None
-        self.emg_pied_gauche = 1
-        self.emg_pied_droit = 2
-        self.analog_channel_footswitch = 16
+        self.emg_pied_gauche_heel = 1
+        self.emg_pied_gauche_toe = 2
+        self.emg_pied_droit_heel = 3
+        self.emg_pied_droit_toe = 4
+        self.analog_channel_foot_switch = 16
         self.phase_detection_method = 'emg'
 
     async def setup(self):
@@ -47,24 +49,28 @@ class DataReceiver:
             """
 
             _, analog = packet.get_analog()
-            # FootSwitch branché directement sur le boitier analog sur le canal 16
+            # Case of FootSwitch system is directly connect to Qualisys analog canal
             if analog[1] and self.phase_detection_method is "analog":
-                foot_switch_processor.gait_phase_detection(footswitch_data=analog[1][self.analog_channel_footswitch-1][2][0])
+                foot_switch_canal = self.analog_channel_foot_switch-1
+                foot_switch_processor.gait_phase_detection(foot_switch_data=analog[1][foot_switch_canal][2][0])
 
+            # Case of FootSwitch are connected to emg
             if analog[1] and self.phase_detection_method is "emg":
                 data = analog[1]
                 emg_data = []
                 for device, sample, channel in data:
                     if device.id == 2:
-                        channel_index = data.index((device, sample, channel)) % device.channel_count  # Numéro du canal
-                        # Ajouter les données au bon channel
+                        channel_index = data.index((device, sample, channel)) % device.channel_count  # channel num
+                        # Adding channel data to the good index
                         if channel_index not in emg_data:
                             emg_data[channel_index] = []
                         emg_data[channel_index].extend(channel.samples)
-                foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit-1], 1)
-                foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_gauche-1], 2)
+                foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit_heel-1],
+                                                             emg_data[self.emg_pied_droit_toe-1], 1)
+                foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_gauche_heel-1],
+                                                             emg_data[self.emg_pied_gauche_toe-1], 2)
 
-            # combined_dict = {**dict_marker, **dict_force, **dict_footswitch}
+            # combined_dict = {**dict_marker, **dict_force}
 
             loop_time = time.perf_counter() - tic
             real_time_to_sleep = (1 / self.system_rate) - loop_time

@@ -4,18 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="bcc578aa-25c0-42d6-9500-3ad5bb6c9811" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/FootSwitch/FootSwitchEMGProcess.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/eWalking_FES_Interface.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/eWalking_FES_Interface.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Data_Reception.py" beforeDir="false" afterPath="$PROJECT_DIR$/Data_Reception.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/FootSwitch/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/FootSwitch/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/RealTime_GaitProcess/SendStimBasedOnFootswitch.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Stim_P24/Stim_parameter.py" beforeDir="false" afterPath="$PROJECT_DIR$/Stim_P24/Stim_parameter.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Stim_P24/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Stim_P24/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
-    </list>
+    <list default="true" id="bcc578aa-25c0-42d6-9500-3ad5bb6c9811" name="Changes" comment="WIP" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
