@@ -14,7 +14,7 @@ class FootSwitchEMGProcessor:
             self.stimulator_function.start_stimulation(channel_to_stim)
             self.sendStim[foot_num] = True
 
-        if (np.mean(np.abs(data_foot_switch_heel)) > 1000 and np.mean(np.abs(data_foot_switch_toe)) < 500 and
+        if (np.mean(np.abs(data_foot_switch_heel)) > 1000 and np.mean(np.abs(data_foot_switch_toe)) > 1000 and
                 self.sendStim[foot_num] is False):
             self.stimulator_function.pause_stimulation()
             self.sendStim[foot_num] = False
