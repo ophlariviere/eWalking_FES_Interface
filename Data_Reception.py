@@ -15,8 +15,8 @@ class DataReceiver:
         self.system_rate = system_rate
         self.device_rate = device_rate
         self.interface = None
-        self.emg_pied_gauche_heel = 1
-        self.emg_pied_gauche_toe = 2
+        self.emg_pied_gauche_heel = 11
+        self.emg_pied_gauche_toe = 12
         self.emg_pied_droit_heel = 3
         self.emg_pied_droit_toe = 4
         self.analog_channel_foot_switch = 16
@@ -67,9 +67,10 @@ class DataReceiver:
                         emg_data[channel_index].extend(channel.samples)
                 foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit_heel-1],
                                                              emg_data[self.emg_pied_droit_toe-1], 1)
+                """
                 foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_gauche_heel-1],
                                                              emg_data[self.emg_pied_gauche_toe-1], 2)
-
+                """
             # combined_dict = {**dict_marker, **dict_force}
 
             loop_time = time.perf_counter() - tic
