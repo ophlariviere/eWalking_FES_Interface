@@ -17,8 +17,8 @@ class DataReceiver:
         self.interface = None
         self.emg_pied_gauche_heel = 11
         self.emg_pied_gauche_toe = 12
-        self.emg_pied_droit_heel = 3
-        self.emg_pied_droit_toe = 4
+        self.emg_pied_droit_heel = 11
+        self.emg_pied_droit_toe = 12
         self.analog_channel_foot_switch = 16
         self.phase_detection_method = 'emg'
 
@@ -33,7 +33,7 @@ class DataReceiver:
         await self.setup()
         while True:
             tic = asyncio.get_event_loop().time()
-            packet = await self.interface.get_current_frame(components=['3d', 'force', 'analog'])
+            packet = await self.interface.get_current_frame(components=['analog'])
 
             # data recuperation
             """
@@ -55,8 +55,8 @@ class DataReceiver:
                 foot_switch_processor.gait_phase_detection(foot_switch_data=analog[1][foot_switch_canal][2][0])
 
             # Case of FootSwitch are connected to emg
-            if analog[1] and self.phase_detection_method is "emg":
-                data = analog[1]
+            if analog and self.phase_detection_method is "emg":
+                data = analog
                 emg_data = []
                 for device, sample, channel in data:
                     if device.id == 2:
@@ -65,7 +65,8 @@ class DataReceiver:
                         if channel_index not in emg_data:
                             emg_data[channel_index] = []
                         emg_data[channel_index].extend(channel.samples)
-                foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit_heel-1],
+                if emg_data is not None:
+                    foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit_heel-1],
                                                              emg_data[self.emg_pied_droit_toe-1], 1)
                 """
                 foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_gauche_heel-1],
