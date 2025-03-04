@@ -1,49 +1,68 @@
-import socket
-import numpy as np
+# THIS EXAMPLE CODE IS PROVIDED FOR GUIDANCE ONLY AND SHOULD NOT BE USED "AS IS" FOR TREADMILL CONTROL
+# WITH A LIVE SUBJECT ON THE TREADMILL.
+#
+# THE EXAMPLE CODE ("SOFTWARE") IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import BertecRemoteControl
+from time import sleep
 
-def open_treadmill_comm():
-    # Création de la connexion TCP/IP à localhost:4000
-    t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    t.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32)  # Taille tampon de réception
-    t.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64)  # Taille tampon d'envoi
+# This is a demo script to use as an example of how to start a connection to the Bertec
+# Treadmill Sof6tware, and send commands to operate your hardware.
 
-    # Connexion à localhost sur le port 4000
-    t.connect(('localhost', 4000))
+# Set up RemoteControl object, then use the start_connection method to set up the
+# network parameters and then call init_connect on the server
+remote = BertecRemoteControl.RemoteControl()
+res = remote.start_connection()
+print(res)
 
-    return t
+# Check to see if we got any initial resposne from the server. If a connection could not be
+# made, None will be return. If the RPC init_connect request failed, the code will return the
+# corresponding error code (and not 1)
+if (res is not None and res['code'] == 1):
+    print("The following commands are supported:\n")
+    print("1. run_treadmill\n2. run_incline")
+    print("3. is_treadmill_moving\n4. is_incline_moving\n5. is_client_authenticated")
+    print("6. get_force_data\n\nInput 0 to exit program")
 
+    command = 1
+    res = ' '
 
-def int16_to_bytes(numbers):
-    # Vérifie que les nombres sont dans l'intervalle [-2^15, 2^15 - 1]
-    numbers = np.array(numbers, dtype=int)
-    n = len(numbers)
+    while (command):
+        command = input("Which command do you wish to use: ")
+        if (command == '1'):
+            print("Using run_treadmill")
+            params = remote.get_run_treadmill_user_input()
+            res = remote.run_treadmill(params['leftVel'], params['leftAccel'], params['leftDecel'], params['rightVel'], params['rightAccel'], params['rightDecel'])
+        elif (command == '2'):
+            print("Using run_incline")
+            params = remote.get_run_incline_user_input()
+            res = remote.run_incline(params['inclineAngle'])
+        elif (command == '3'):
+            print("Using is_treadmill_moving")
+            res = remote.is_treadmill_moving()
+        elif (command == '4'):
+            print("Using is_incline_moving")
+            res = remote.is_incline_moving()
+        elif (command == '5'):
+            print("Using is_client_authenticated")
+            res = remote.is_client_authenticated()
+        elif (command == '6'):
+            print("Using get_force_data")
+            res = remote.get_force_data()
+        else:
+            print("Exiting program")
+            remote.stop_connection()
+            command = 0
+            break
 
-    bytes_array = np.zeros((n, 2), dtype=np.uint8)
+        if (command != '6'):
+            print("Result code: " + str(res['code']) + " - Message: " + res['message'])
+        else:
+            print(str(res))
 
-    for i in range(n):
-        if numbers[i] > (2 ** 15 - 1):
-            print(f"Warning: number out of range for conversion. Saturating entry #{i + 1}")
-            numbers[i] = 2 ** 15 - 1
-        elif numbers[i] < (-2 ** 15):
-            print(f"Warning: number out of range for conversion. Saturating entry #{i + 1}")
-            numbers[i] = -2 ** 15
+remote.stop_connection()
 
-        if numbers[i] < 0:  # Nombres négatifs
-            aux = 2 ** 15 + numbers[i]  # Calcul du complément à 2
-            byte1 = 128  # Le bit de signe est stocké dans byte1 (MSB)
-        else:  # Nombres positifs
-            aux = numbers[i]
-            byte1 = 0  # Le bit de signe est 0 (LSB)
-
-        byte1 = byte1 + (aux // 2 ** 8)  # Premier octet : signe + MSB
-        byte2 = aux - 2 ** 8 * (aux // 2 ** 8)  # Deuxième octet : LSB
-
-        bytes_array[i, 0] = byte1
-        bytes_array[i, 1] = byte2
-
-    return bytes_array
-
-
-if __name__ == "__main__":
-    open_treadmill_comm()
