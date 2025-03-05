@@ -1,15 +1,5 @@
-# THIS EXAMPLE CODE IS PROVIDED FOR GUIDANCE ONLY AND SHOULD NOT BE USED "AS IS" FOR TREADMILL CONTROL
-# WITH A LIVE SUBJECT ON THE TREADMILL.
-#
-# THE EXAMPLE CODE ("SOFTWARE") IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-import threading
+from threading import Timer
 import zmq
-import time
 
 
 class RemoteControl:
@@ -36,9 +26,7 @@ class RemoteControl:
 
         # Set up ZMQ context and other connection parameters
         self.id = 1
-        self.heart_timer_running = False
         self.heart_attempts = 0
-        self.heart_timer = None
         self.context = zmq.Context()
         self.connected = False
         self.started = True
@@ -62,15 +50,18 @@ class RemoteControl:
         self.sub_socket.connect("tcp://" + self.server_ip + ":" + data_port)
         self.sub_socket.subscribe('')
         # Send initial connection request to see if our connection is good
-        init_res = self.send_init_connect(client_ip, client_port)
+        init_res = self.send_init_connect(self.heart_ip, self.heart_port)
 
         # Wait for response with default timeout value. If we don't get a response
         # back from send_init_connect
         if (init_res is not None and init_res['code'] == 1):
             self.sub_poller = zmq.Poller()
             self.sub_poller.register(self.sub_socket, zmq.POLLIN)
+            # self.sub_poller.register(self.heart_socket, zmq.POLLIN)
+            # self.heart_timer = Timer(1, self.get_heartbeat_resp)
+            # self.heart_timer.start()
             self.connected = True
-            self.start_heartbeat_timer();
+
             return init_res
         else:
             self.stop_connection()
@@ -78,58 +69,24 @@ class RemoteControl:
         return None
 
     def stop_connection(self):
-        if (not self.started):
+        if ('started' not in globals() or not self.started):
             return
 
         self.started = False
         self.connected = False
 
-        self.stop_heartbeat_timer()
-
         self.req_socket.disconnect("tcp://" + self.server_ip + ":" + self.rpc_port)
         self.req_socket.close()
         self.sub_socket.disconnect("tcp://" + self.server_ip + ":" + self.data_port)
         self.sub_socket.close()
+        # self.heart_socket.unbind("tcp://" + self.heart_ip + ":" + self.heart_port)
+        # self.heart_socket.close()
 
+        # if ('heart_timer' in globals()):
+        #     self.heart_timer.cancel()
         if ('sub_poller' in globals()):
             self.sub_poller.unregister(self.sub_socket)
-
-    def start_heartbeat_timer(self):
-        self.heart_timer_running = True
-        self.heart_timer = threading.Thread(target=self._heartbeat_thread)
-        self.heart_timer.start()
-
-    def _heartbeat_thread(self):
-        heart_socket = self.context.socket(zmq.DEALER)
-        heart_socket.setsockopt(zmq.RCVTIMEO, self.DEFAULT_TIMEOUT)
-        heart_socket.bind("tcp://" + self.heart_ip + ":" + self.heart_port)
-
-        while self.heart_timer_running and self.connected:
-            self.heart_attempts += 1
-            try:
-                message = heart_socket.recv()
-                json_str = message.decode('utf-8')
-                # print(f"Received heartbeat message: {json_str}")
-                heart_socket.send(message)
-                self.heart_attempts = 0
-                time.sleep(0.045)
-            except zmq.Again:
-                print(f"zmq.Again")
-                if self.heart_attempts >= self.HEARTBEAT_MAX_ATTEMPTS:
-                    print(f"Heartbeat Attempts count exceeded max value of {self.HEARTBEAT_MAX_ATTEMPTS}")
-                    self.stop_connection()
-                    break
-            except Exception as e:
-                print(f"Exception in heartbeat thread: {e}")
-
-        heart_socket.unbind("tcp://" + self.heart_ip + ":" + self.heart_port)
-        heart_socket.close()
-
-    def stop_heartbeat_timer(self):
-        print(f"stop_heartbeat_timer")
-        self.heart_timer_running = False
-        if self.heart_timer and self.heart_timer.is_alive():
-            self.heart_timer.join()
+            # self.sub_poller.unregister(self.heart_socket)
 
     def get_json_request_message(self, method, params):
         json_message = {
@@ -148,6 +105,32 @@ class RemoteControl:
                 return self.sub_socket.recv_json(zmq.NOBLOCK)
         else:
             return None
+
+    def get_heartbeat_resp(self):
+        self.heart_attempts += 1
+        socks = dict(self.sub_poller.poll(self.DEFAULT_TIMEOUT))
+        if socks:
+            if socks.get(self.heart_socket) == zmq.POLLIN:
+                self.connected = True
+                res = self.heart_socket.recv()
+                identity = self.heart_socket.recv()
+                self.heart_socket.send(res, zmq.SNDMORE)
+                self.heart_socket.send(identity)
+            else:
+                res = None
+        else:
+            res = None
+
+        if (res is None):
+            if self.heart_attempts >= self.HEARTBEAT_MAX_ATTEMPTS:
+                self.stop_connection()
+        else:
+            self.heart_attempts = 0
+
+        if (self.connected):
+            self.heart_timer.cancel()
+            self.heart_timer = Timer(1, self.get_heartbeat_resp)
+            self.heart_timer.start()
 
     def send_init_connect(self, ip, port):
         params = {

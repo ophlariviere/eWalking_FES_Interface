@@ -1,13 +1,5 @@
-# THIS EXAMPLE CODE IS PROVIDED FOR GUIDANCE ONLY AND SHOULD NOT BE USED "AS IS" FOR TREADMILL CONTROL
-# WITH A LIVE SUBJECT ON THE TREADMILL.
-#
-# THE EXAMPLE CODE ("SOFTWARE") IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 import BertecRemoteControl
+
 from time import sleep
 
 # This is a demo script to use as an example of how to start a connection to the Bertec
@@ -15,6 +7,7 @@ from time import sleep
 
 # Set up RemoteControl object, then use the start_connection method to set up the
 # network parameters and then call init_connect on the server
+
 remote = BertecRemoteControl.RemoteControl()
 res = remote.start_connection()
 print(res)
@@ -64,5 +57,6 @@ if (res is not None and res['code'] == 1):
         else:
             print(str(res))
 
-remote.stop_connection()
+6
+
 
