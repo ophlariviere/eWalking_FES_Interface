@@ -1,10 +1,10 @@
 import numpy as np
-from Stim_P24.Stim_Interface import StimInterfaceWidget
+
 
 
 class FootSwitchEMGProcessor:
-    def __init__(self):
-        self.stimulator_function = StimInterfaceWidget
+    def __init__(self, stimulator_interface):
+        self.stimulator_function = stimulator_interface
         self.sendStim = {1: False, 2: False}
 
     def heel_off_detection(self, data_foot_switch_heel, data_foot_switch_toe, foot_num):

@@ -9,11 +9,11 @@ from Stim_P24.Stim_Interface import StimInterfaceWidget
 
 
 # foot_switch_processor = FootSwitchDataProcessor()
-foot_switch_emg_processor = FootSwitchEMGProcessor()
+
 
 
 class DataReceiver:
-    def __init__(self, server_ip="169.254.171.205", port=7, system_rate=100, device_rate=1000):
+    def __init__(self, foot_switch_emg_processor, server_ip="169.254.171.205", port=7, system_rate=100, device_rate=1000):
         # Paramètres
         self.server_ip = server_ip
         self.port = port
@@ -26,6 +26,7 @@ class DataReceiver:
         self.emg_pied_droit_toe = 2 # 11
         self.analog_channel_foot_switch = 16
         self.phase_detection_method = 'emg'
+        self.foot_switch_emg_processor = foot_switch_emg_processor
 
     async def setup(self):
         """Établit la connexion avec Qualisys"""
@@ -77,7 +78,7 @@ class DataReceiver:
 
                             if len(emg_data) > 0:
                                 try:
-                                    foot_switch_emg_processor.heel_off_detection(
+                                    self.foot_switch_emg_processor.heel_off_detection(
                                         emg_data[self.emg_pied_droit_heel - 1],
                                         emg_data[self.emg_pied_droit_toe - 1],
                                         1,
@@ -110,15 +111,16 @@ def start_gui():
     app = QApplication(sys.argv)
     gui = StimInterfaceWidget()
     gui.show()
-    sys.exit(app.exec_())
-
-
-if __name__ == "__main__":
-    gui_thread = threading.Thread(target=start_gui, daemon=True)
-    gui_thread.start()
-    processor = DataReceiver()
-
+    foot_switch_emg_processor = FootSwitchEMGProcessor(gui)
+    processor = DataReceiver(foot_switch_emg_processor)
     try:
         asyncio.run(processor.listen_for_data())  # Écoute les paquets dès leur arrivée
     except KeyboardInterrupt:
         print("🛑 Arrêt du processus par l'utilisateur.")
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    start_gui()
+
+
