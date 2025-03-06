@@ -12,7 +12,7 @@ class FootSwitchEMGProcessor:
         if (np.nanmean(np.abs(data_foot_switch_heel)) > 1000 and (np.nanmean(np.abs(data_foot_switch_toe)) < 100) and
                 self.sendStim[foot_num] is False):
             channel_to_stim = [1, 2, 3, 4] if foot_num == 1 else [5, 6, 7, 8]
-            # self.stimulator_function.start_stimulation(channel_to_stim)
+            self.stimulator_function.start_stimulation(channel_to_stim)
             print('Send stim')
             self.sendStim[foot_num] = True
 

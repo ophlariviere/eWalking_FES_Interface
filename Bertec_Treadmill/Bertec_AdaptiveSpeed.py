@@ -2,7 +2,6 @@ import BertecRemoteControl
 import time
 
 
-
 def estimate_speed():
     speed = 1.5
     return speed

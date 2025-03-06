@@ -15,10 +15,10 @@ class DataReceiver:
         self.system_rate = system_rate
         self.device_rate = device_rate
         self.interface = None
-        self.emg_pied_gauche_heel = 1
-        self.emg_pied_gauche_toe = 2
-        self.emg_pied_droit_heel = 1
-        self.emg_pied_droit_toe = 2
+        self.emg_pied_gauche_heel = 4
+        self.emg_pied_gauche_toe = 3
+        self.emg_pied_droit_heel = 1 #10
+        self.emg_pied_droit_toe = 2 # 11
         self.analog_channel_foot_switch = 16
         self.phase_detection_method = 'emg'
 
@@ -74,6 +74,11 @@ class DataReceiver:
                                         emg_data[self.emg_pied_droit_heel - 1],
                                         emg_data[self.emg_pied_droit_toe - 1],
                                         1
+                                    )
+                                    foot_switch_emg_processor.heel_off_detection(
+                                        emg_data[self.emg_pied_gauche_heel - 1],
+                                        emg_data[self.emg_pied_gauche_toe - 1],
+                                        2
                                     )
                                 except IndexError as e:
                                     print(f"❌ Erreur d'indexation dans le traitement EMG : {e}")

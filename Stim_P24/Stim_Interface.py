@@ -25,8 +25,9 @@ class StimInterfaceWidget(QWidget):
         super().__init__()
         self.title = "Interface Stimulation"
         self.channel_inputs = {}
-        self.init_ui()
         self.stimulateur_com = StimulatorSetUp
+        self.init_ui()
+
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
@@ -69,13 +70,13 @@ class StimInterfaceWidget(QWidget):
         """Créer les boutons pour contrôler la stimulation."""
         layout = QHBoxLayout()
         self.activate_button = QPushButton("Activer Stimulateur")
-        self.activate_button.clicked.connect(self.stimulateur_com.activate_stimulator(self))
+        self.activate_button.clicked.connect(self.stimulateur_com.activate_stimulator)
         self.update_button = QPushButton("Actualiser Paramètre Stim")
-        self.update_button.clicked.connect(self.stimulateur_com.update_stimulation_parameter(self))
+        self.update_button.clicked.connect(self.stimulateur_com.update_stimulation_parameter)
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(self.stimulateur_com.start_stimulation(self, [1, 2, 3, 4, 5, 6, 7, 8]))
+        #self.start_button.clicked.connect(self.stimulateur_com.start_stimulation(self, channel_to_send=[1, 2, 3, 4, 5, 6, 7, 8]))
         self.stop_button = QPushButton("Arrêter Stimuleur")
-        self.stop_button.clicked.connect(self.stimulateur_com.stop_stimulator(self))
+        self.stop_button.clicked.connect(self.stimulateur_com.stop_stimulator)
         self.checkpauseStim = QCheckBox("Stop tying send stim", self)
         self.checkpauseStim.setChecked(True)
         self.checkpauseStim.stateChanged.connect(self.pausefonctiontosendstim)
