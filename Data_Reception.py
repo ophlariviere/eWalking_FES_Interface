@@ -1,9 +1,14 @@
 import asyncio
 import qtm_rt
+import threading
+import sys
+from PyQt5.QtWidgets import QApplication
 from FootSwitch.FootSwitchDataProcess import FootSwitchDataProcessor
 from FootSwitch.FootSwitchEMGProcess import FootSwitchEMGProcessor
+from Stim_P24.Stim_Interface import StimInterfaceWidget
 
-foot_switch_processor = FootSwitchDataProcessor()
+
+# foot_switch_processor = FootSwitchDataProcessor()
 foot_switch_emg_processor = FootSwitchEMGProcessor()
 
 
@@ -17,7 +22,7 @@ class DataReceiver:
         self.interface = None
         self.emg_pied_gauche_heel = 4
         self.emg_pied_gauche_toe = 3
-        self.emg_pied_droit_heel = 1 #10
+        self.emg_pied_droit_heel = 1 # 10
         self.emg_pied_droit_toe = 2 # 11
         self.analog_channel_foot_switch = 16
         self.phase_detection_method = 'emg'
@@ -54,13 +59,15 @@ class DataReceiver:
                         # print(f"📊 Données analogiques reçues : {analog}")  # Debugging
 
                         if self.phase_detection_method == "analog":
+                            print()
+                            """
                             foot_switch_canal = self.analog_channel_foot_switch - 1
                             try:
-                                foot_switch_processor.gait_phase_detection(
-                                    foot_switch_data=analog[1][foot_switch_canal][2][0]
-                                )
+                                # foot_switch_processor.gait_phase_detection(
+                                # foot_switch_data=analog[1][foot_switch_canal][2][0])
                             except IndexError as e:
                                 print(f"❌ Erreur d'indexation dans les données analogiques : {e}")
+                            """
 
                         elif self.phase_detection_method == "emg":
                             emg_data = []
@@ -73,13 +80,15 @@ class DataReceiver:
                                     foot_switch_emg_processor.heel_off_detection(
                                         emg_data[self.emg_pied_droit_heel - 1],
                                         emg_data[self.emg_pied_droit_toe - 1],
-                                        1
+                                        1,
                                     )
+                                    """
                                     foot_switch_emg_processor.heel_off_detection(
                                         emg_data[self.emg_pied_gauche_heel - 1],
                                         emg_data[self.emg_pied_gauche_toe - 1],
                                         2
                                     )
+                                    """
                                 except IndexError as e:
                                     print(f"❌ Erreur d'indexation dans le traitement EMG : {e}")
 
@@ -97,9 +106,18 @@ class DataReceiver:
             if self.interface:
                 await self.interface.disconnect()
 
+def start_gui():
+    app = QApplication(sys.argv)
+    gui = StimInterfaceWidget()
+    gui.show()
+    sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
+    gui_thread = threading.Thread(target=start_gui, daemon=True)
+    gui_thread.start()
     processor = DataReceiver()
+
     try:
         asyncio.run(processor.listen_for_data())  # Écoute les paquets dès leur arrivée
     except KeyboardInterrupt:

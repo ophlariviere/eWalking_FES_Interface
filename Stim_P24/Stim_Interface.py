@@ -25,9 +25,9 @@ class StimInterfaceWidget(QWidget):
         super().__init__()
         self.title = "Interface Stimulation"
         self.channel_inputs = {}
-        self.stimulateur_com = StimulatorSetUp
+        self.stimulateur_com = StimulatorSetUp()
+        self.dolookneedsendstim = False
         self.init_ui()
-
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
@@ -71,13 +71,19 @@ class StimInterfaceWidget(QWidget):
         layout = QHBoxLayout()
         self.activate_button = QPushButton("Activer Stimulateur")
         self.activate_button.clicked.connect(self.stimulateur_com.activate_stimulator)
+        # Use lambda to pass arguments correctly to the method
         self.update_button = QPushButton("Actualiser Paramètre Stim")
-        self.update_button.clicked.connect(self.stimulateur_com.update_stimulation_parameter)
+        self.update_button.clicked.connect(
+            lambda: self.stimulateur_com.update_stimulation_parameter(self.channel_inputs))
+
         self.start_button = QPushButton("Envoyer Stimulation")
-        #self.start_button.clicked.connect(self.stimulateur_com.start_stimulation(self, channel_to_send=[1, 2, 3, 4, 5, 6, 7, 8]))
+        self.start_button.clicked.connect(
+            lambda: self.stimulateur_com.start_stimulation([1, 2, 3, 4, 5, 6, 7, 8]))
+
         self.stop_button = QPushButton("Arrêter Stimuleur")
         self.stop_button.clicked.connect(self.stimulateur_com.stop_stimulator)
-        self.checkpauseStim = QCheckBox("Stop tying send stim", self)
+
+        self.checkpauseStim = QCheckBox("Stop tying send stim")
         self.checkpauseStim.setChecked(True)
         self.checkpauseStim.stateChanged.connect(self.pausefonctiontosendstim)
         layout.addWidget(self.checkpauseStim)
@@ -152,6 +158,12 @@ class StimInterfaceWidget(QWidget):
                         widget.deleteLater()
                 # Supprimer le layout lui-même
                 self.channel_config_layout.removeItem(layout)
+
+    def call_start_stimulation(self, channel_to_stim):
+        self.stimulateur_com.start_stimulation(channel_to_stim)
+
+    def call_pause_stimulation(self):
+        self.stimulateur_com.pause_stimulation()
 
 
 if __name__ == "__main__":

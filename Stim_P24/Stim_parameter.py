@@ -6,17 +6,15 @@ import logging
 class StimulatorSetUp:
     def __init__(self):
         super().__init__()
-        from Stim_P24.Stim_Interface import StimInterfaceWidget
         self.stimulator = None
         self.stimulator_is_active = False
         self.stimulator_is_sending_stim = False
         self.stimulator_parameters = {}
         self.num_config = 0
-        self.interface = StimInterfaceWidget
 
     def activate_stimulator(self):
         if self.stimulator is None:
-            self.stimulator = St(port="COM3", show_log="Status")
+            self.stimulator = St(port="COM5", show_log="Status")
             self.stimulator_is_active = True
 
     def start_stimulation(self, channel_to_send):
@@ -27,14 +25,14 @@ class StimulatorSetUp:
                 )
                 return
             channels_instructions = []
-            for channel, inputs in self.interface.channel_inputs.items():
+            for channel, inputs in self.stimulator_parameters.items():
                 if channel in channel_to_send:
                     channel = Channel(
                         no_channel=channel,
-                        name=self.stimulator_parameters[channel]["name"].text(),
-                        amplitude=self.stimulator_parameters[channel]["amplitude"].value(),
-                        pulse_width=self.stimulator_parameters[channel]["pulse_width"].value(),
-                        frequency=self.stimulator_parameters[channel]["frequency"].value(),
+                        name=self.stimulator_parameters[channel]["name"],
+                        amplitude=self.stimulator_parameters[channel]["amplitude"],
+                        pulse_width=self.stimulator_parameters[channel]["pulse_width"],
+                        frequency=self.stimulator_parameters[channel]["frequency"],
                         mode=Modes.SINGLE,
                         device_type=Device.Rehastimp24,
                     )
@@ -76,12 +74,12 @@ class StimulatorSetUp:
         except Exception as e:
             logging.error(f"Error during stopping the stimulator : {e}")
 
-    def update_stimulation_parameter(self):
+    def update_stimulation_parameter(self, channel_inputs):
         """Met à jour la stimulation."""
         self.num_config += 1
 
         if self.stimulator is not None:
-            for channel, inputs in self.interface.channel_inputs.items():
+            for channel, inputs in channel_inputs.items():
                 # Check if channel exist yet, if not initialised it
                 if channel not in self.stimulator_parameters:
                     self.stimulator_parameters[channel] = {
