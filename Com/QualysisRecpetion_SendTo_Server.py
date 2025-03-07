@@ -1,5 +1,4 @@
 import asyncio
-import time
 import qtm_rt
 from biosiglive import Server
 
@@ -7,7 +6,7 @@ from biosiglive import Server
 class QualisysDataReceiver:
     def __init__(
             self,
-            server_ip="169.254.171.205",
+            server_ip="192.168.0.2",
             server_port=7, system_rate=100):
         self.server = Server(server_ip, server_port)
         self.server.start()
@@ -16,6 +15,7 @@ class QualisysDataReceiver:
         self.interface = None
         self.system_rate = system_rate
         self.qualisys_ip = "192.168.254.1"
+        self.phase_detection_method = "emg"
 
     async def setup(self):
         """Établit la connexion avec Qualisys"""
@@ -32,45 +32,56 @@ class QualisysDataReceiver:
 
         try:
             while True:
-                tic = asyncio.get_event_loop().time()
+                # Récupère le paquet dès qu'il est disponible
                 packet = await self.interface.get_current_frame(components=['analog'])
+
+                # Si aucun paquet n'est reçu, passe au suivant
                 if not packet:
                     continue
 
                 try:
+                    # Traite les données analogiques
                     _, analog_data = packet.get_analog()
                     if analog_data and len(analog_data) > 1:
-                        analog = analog_data
+                        analog = analog_data  # Extraction des données analogiques
 
-                        # Traitement des données EMG (ajustez ici selon votre logique de détection)
-                        emg_data = []
-                        for device, sample, channel in analog:
-                            if hasattr(device, 'id') and device.id == 2:
-                                emg_data.append(channel[0])
-                        dict_footswitch = {'footswitch_data': emg_data}
+                        print(f"📊 Données analogiques reçues : {analog}")  # Debugging
+
+                        if self.phase_detection_method == "emg":
+                            emg_data = []
+                            for device, sample, channel in analog:
+                                if hasattr(device, 'id') and device.id == 2:
+                                    emg_data.append(channel[0])
+
+                            if len(emg_data) > 0:
+                                try:
+                                    connection, message = self.server.client_listening()  # Non-bloquant
+                                    if connection:
+                                        data = {
+                                            "footswitch-data": emg_data,
+                                        }
+                                        self.server.send_data(data, connection, message)
+                                except Exception as e:
+                                    print(e)
+                                    continue
                 except Exception as e:
-                    print(f"Erreur EMG: {e}")
-
-                connection, message = self.server.client_listening()  # Non-bloquant
-                if connection:
-                    if emg_data is not []:
-                        self.server.send_data(dict_footswitch, connection, message)
-
-                loop_time = time.perf_counter() - tic
-                real_time_to_sleep = (1 / self.system_rate) - loop_time
-                if real_time_to_sleep > 0:
-                    await asyncio.sleep(real_time_to_sleep)
+                    # Si une erreur survient dans le traitement du paquet, on affiche l'erreur et on passe au paquet suivant
+                    # print(f"⚠️ Erreur lors du traitement du paquet : {e}")
+                    continue  # Passe au paquet suivant sans arrêter le programme
 
         except asyncio.CancelledError:
-            print("Arrêt de la boucle d'écoute des données.")
+            print("⏹️ Arrêt de la boucle de réception des données.")
         except Exception as e:
-            print(f"Erreur inattendue: {e}")
+            print(f"🚨 Erreur inattendue dans la boucle principale : {e}")
         finally:
-            print("Fermeture de la connexion...")
+            print("🔌 Fermeture de la connexion...")
             if self.interface:
-                self.interface.disconnect()
+                await self.interface.disconnect()
 
 
 if __name__ == "__main__":
     processor = QualisysDataReceiver()
-    asyncio.run(processor.listen_for_data())
+    try:
+        asyncio.run(processor.listen_for_data())  # Écoute les paquets dès leur arrivée
+    except KeyboardInterrupt:
+        print("🛑 Arrêt du processus par l'utilisateur.")
