@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
 )
 import sys
 import logging
-from Stim_P24.Stim_parameter import StimulatorSetUp
+from pysciencemode import Device, Modes, Channel
+from pysciencemode import RehastimP24 as St
 
 
 # Configurer le logging
@@ -25,9 +26,13 @@ class StimInterfaceWidget(QWidget):
         super().__init__()
         self.title = "Interface Stimulation"
         self.channel_inputs = {}
-        self.stimulateur_com = StimulatorSetUp()
         self.dolookneedsendstim = False
         self.init_ui()
+        self.stimulator = None
+        self.stimulator_is_active = False
+        self.stimulator_is_sending_stim = False
+        self.stimulator_parameters = {}
+        self.num_config = 0
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
@@ -70,18 +75,16 @@ class StimInterfaceWidget(QWidget):
         """Créer les boutons pour contrôler la stimulation."""
         layout = QHBoxLayout()
         self.activate_button = QPushButton("Activer Stimulateur")
-        self.activate_button.clicked.connect(self.stimulateur_com.activate_stimulator)
+        self.activate_button.clicked.connect(self.activate_stimulator)
         # Use lambda to pass arguments correctly to the method
         self.update_button = QPushButton("Actualiser Paramètre Stim")
-        self.update_button.clicked.connect(
-            lambda: self.stimulateur_com.update_stimulation_parameter(self.channel_inputs))
+        self.update_button.clicked.connect(self.update_stimulation_parameter)
 
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(
-            lambda: self.stimulateur_com.start_stimulation([1, 2, 3, 4, 5, 6, 7, 8]))
+        self.start_button.clicked.connect(self.call_start_stimulation)
 
         self.stop_button = QPushButton("Arrêter Stimuleur")
-        self.stop_button.clicked.connect(self.stimulateur_com.stop_stimulator)
+        self.stop_button.clicked.connect(self.stop_stimulator)
 
         self.checkpauseStim = QCheckBox("Stop tying send stim")
         self.checkpauseStim.setChecked(True)
@@ -159,11 +162,95 @@ class StimInterfaceWidget(QWidget):
                 # Supprimer le layout lui-même
                 self.channel_config_layout.removeItem(layout)
 
-    def call_start_stimulation(self, channel_to_stim):
-        self.stimulateur_com.start_stimulation(channel_to_stim)
+
+    def activate_stimulator(self):
+        if self.stimulator is None:
+            self.stimulator = St(port="COM3", show_log="Status")
+            self.stimulator_is_active = True
+            self.num_config = 0
+
+
+    def call_start_stimulation(self, channel_to_send):
+        try:
+            if self.stimulator is None:
+                logging.warning(
+                    "Stimulator non initialised. Please initialised stimulator before sending stim."
+                )
+                return
+            channels_instructions = []
+            for channel, inputs in self.stimulator_parameters.items():
+                if channel in channel_to_send:
+                    channel = Channel(
+                        no_channel=channel,
+                        name=self.stimulator_parameters[channel]["name"],
+                        amplitude=self.stimulator_parameters[channel]["amplitude"],
+                        pulse_width=self.stimulator_parameters[channel]["pulse_width"],
+                        frequency=self.stimulator_parameters[channel]["frequency"],
+                        mode=Modes.SINGLE,
+                        device_type=Device.Rehastimp24,
+                    )
+                    channels_instructions.append(channel)
+
+            if channels_instructions:
+                if self.stimulator_is_sending_stim is True:
+                    self.call_pause_stimulation()
+                self.stimulator.init_stimulation(list_channels=channels_instructions)
+                self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
+                self.stimulator.start_stimulation(upd_list_channels=channels_instructions, )
+                self.stimulator_is_sending_stim = True
+                logging.info(f"Stimulation start on channel {channel_to_send}")
+
+        except Exception as e:
+            logging.error(f"Error when sending stimulation : {e}")
 
     def call_pause_stimulation(self):
-        self.stimulateur_com.pause_stimulation()
+        try:
+            if self.stimulator:
+                self.stimulator.end_stimulation()
+                self.stimulator_is_sending_stim = False
+                logging.info("Stimulation stopped.")
+            else:
+                logging.warning("No stimulator is active so stimulation can't be stopped.")
+        except Exception as e:
+            logging.error(f"Error during stopping stimulation : {e}")
+
+    def stop_stimulator(self):
+        try:
+            if self.stimulator:
+                self.pause_stimulation()
+                self.stimulator_is_sending_stim = False
+                self.stimulator.close_port()
+                self.stimulator_is_active = False
+                self.stimulator = None
+                logging.info("Stimulator stopped.")
+            else:
+                logging.warning("None stimulator to stopped.")
+        except Exception as e:
+            logging.error(f"Error during stopping the stimulator : {e}")
+
+    def update_stimulation_parameter(self):
+        """Met à jour la stimulation."""
+        self.num_config += 1
+        self.stimulator_parameters = {}
+        if self.stimulator is not None:
+            for channel, inputs in self.channel_inputs.items():
+                # Check if channel exist yet, if not initialised it
+                self.stimulator_parameters[channel] = {
+                    "name": "",
+                    "amplitude": 0,
+                    "pulse_width": 0,
+                    "frequency": 0,
+                    "mode": "",
+                    "device_type": None,
+                }
+
+                # Upgrade stimulation parameters value
+                self.stimulator_parameters[channel]["name"] = inputs["name_input"].text()
+                self.stimulator_parameters[channel]["amplitude"] = inputs["amplitude_input"].value()
+                self.stimulator_parameters[channel]["pulse_width"] = inputs["pulse_width_input"].value()
+                self.stimulator_parameters[channel]["frequency"] = inputs["frequency_input"].value()
+                self.stimulator_parameters[channel]["mode"] = inputs["mode_input"].currentText()
+                self.stimulator_parameters[channel]["device_type"] = Device.Rehastimp24
 
 
 if __name__ == "__main__":

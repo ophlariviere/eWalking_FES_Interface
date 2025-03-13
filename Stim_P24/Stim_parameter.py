@@ -14,7 +14,7 @@ class StimulatorSetUp:
 
     def activate_stimulator(self):
         if self.stimulator is None:
-            self.stimulator = St(port="COM5", show_log="Status")
+            self.stimulator = St(port="COM3", show_log="Status")
             self.stimulator_is_active = True
 
     def start_stimulation(self, channel_to_send):
