@@ -11,6 +11,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QLabel
 )
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap
 import sys
 import logging
 from pysciencemode import Device, Modes, Channel
@@ -32,12 +34,16 @@ class StimInterfaceWidget(QWidget):
         self.stimulator_is_active = False
         self.stimulator_is_sending_stim = False
         self.stimulator_parameters = {}
+        self.foot_emg = {}
         self.num_config = 0
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
         self.setWindowTitle(self.title)
         layout = QVBoxLayout(self)
+
+        # Configuration channel emg
+        layout.addWidget(self.create_emg_num_for_foot())
 
         # Configuration des canaux de stimulation
         layout.addWidget(self.create_channel_config_group())
@@ -46,6 +52,67 @@ class StimInterfaceWidget(QWidget):
         layout.addLayout(self.create_stimulation_controls())
 
         self.setLayout(layout)
+
+    def create_emg_num_for_foot(self):
+        # Créer un QGroupBox pour encapsuler les champs de configuration
+        groupbox = QGroupBox("Configurer les canaux")
+
+        # Créer un layout principal pour les pieds
+        main_layout = QVBoxLayout()
+
+        # Layout pour les orteils
+        foot_toe_layout = QHBoxLayout()  # Layout horizontal pour les orteils
+        left_toe = QSpinBox()
+        left_toe.setRange(0, 16)
+        left_toe.setPrefix("Left Toe: ")
+
+        right_toe = QSpinBox()
+        right_toe.setRange(0, 16)
+        right_toe.setPrefix("Right Toe: ")
+
+        foot_toe_layout.addWidget(left_toe)
+        foot_toe_layout.addWidget(right_toe)
+
+        # Layout pour les talons
+        foot_heel_layout = QHBoxLayout()  # Layout horizontal pour les talons
+        left_heel = QSpinBox()
+        left_heel.setRange(0, 16)
+        left_heel.setPrefix("Left Heel: ")
+
+        right_heel = QSpinBox()
+        right_heel.setRange(0, 16)
+        right_heel.setPrefix("Right Heel: ")
+
+        foot_heel_layout.addWidget(left_heel)
+        foot_heel_layout.addWidget(right_heel)
+
+        # Créer un bouton OK et connecter la fonction d'enregistrement
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(
+            lambda: self.save_emg_values(left_toe.value(), right_toe.value(), left_heel.value(), right_heel.value()))
+
+        # Ajouter le bouton au layout
+        main_layout.addWidget(ok_button)
+
+        # Ajouter les sous-layouts (orteils et talons) au layout principal
+        main_layout.addLayout(foot_toe_layout)
+        main_layout.addLayout(foot_heel_layout)
+
+        # Assigner le layout au QGroupBox
+        groupbox.setLayout(main_layout)
+
+        # Retourner le QGroupBox complet
+        return groupbox
+
+    def save_emg_values(self, left_toe_value, right_toe_value, left_heel_value, right_heel_value):
+        # Enregistrer les valeurs dans foot_emg
+        self.foot_emg = {
+            "Left Toe": left_toe_value,
+            "Right Toe": right_toe_value,
+            "Left Heel": left_heel_value,
+            "Right Heel": right_heel_value
+        }
+
 
     """Visu Stim"""
     def create_channel_config_group(self):
@@ -196,7 +263,7 @@ class StimInterfaceWidget(QWidget):
                     self.call_pause_stimulation()
                 self.stimulator.init_stimulation(list_channels=channels_instructions)
                 self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
-                self.stimulator.start_stimulation(upd_list_channels=channels_instructions, )
+                self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator_is_sending_stim = True
                 logging.info(f"Stimulation start on channel {channel_to_send}")
 
@@ -251,6 +318,7 @@ class StimInterfaceWidget(QWidget):
                 self.stimulator_parameters[channel]["frequency"] = inputs["frequency_input"].value()
                 self.stimulator_parameters[channel]["mode"] = inputs["mode_input"].currentText()
                 self.stimulator_parameters[channel]["device_type"] = Device.Rehastimp24
+            print('Stimulator parameter updated')
 
 
 if __name__ == "__main__":

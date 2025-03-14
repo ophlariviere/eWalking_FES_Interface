@@ -2,7 +2,6 @@ import time
 from biosiglive import TcpClient
 from PyQt5.QtCore import QObject
 import logging
-from FootSwitch import FootSwitchEMGProcessor
 import numpy as np
 
 class DataReceiver(QObject):
@@ -39,10 +38,12 @@ class DataReceiver(QObject):
                     time.sleep(1)  # Optionally wait before retrying
 
             if received_data["footswitch_data"]:  # Ensure we have valid data before proceeding
-                footswitch_data=received_data["footswitch_data"]
+                footswitch_data = received_data["footswitch_data"]
                 if self.visualization_widget.dolookneedsendstim:
-                    self.heel_off_detection(footswitch_data[0],footswitch_data[1],1)
-
+                    emg_num = self.visualization_widget.foot_emg
+                    if emg_num:
+                        self.heel_off_detection(footswitch_data[emg_num['Right Heel']],footswitch_data["Right Toe"],1)
+                        self.heel_off_detection(footswitch_data["Left Heel"], footswitch_data["Left Toe"], 2)
 
             loop_time = time.time() - tic
             real_time_to_sleep = max(0, 1 / self.read_frequency - loop_time)
