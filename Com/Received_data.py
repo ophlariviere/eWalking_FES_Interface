@@ -42,8 +42,10 @@ class DataReceiver(QObject):
                 if self.visualization_widget.dolookneedsendstim:
                     emg_num = self.visualization_widget.foot_emg
                     if emg_num:
-                        self.heel_off_detection(footswitch_data[emg_num['Right Heel']],footswitch_data["Right Toe"],1)
-                        self.heel_off_detection(footswitch_data["Left Heel"], footswitch_data["Left Toe"], 2)
+                        if not np.isnan(footswitch_data[0][emg_num['Right Heel']]).any() and not np.isnan(footswitch_data[0][emg_num['Right Toe']]).any():
+                            self.heel_off_detection(footswitch_data[0][emg_num['Right Heel']]**2, footswitch_data[0][emg_num['Right Toe']]**2,1)
+                        if not np.isnan(footswitch_data[0][emg_num['Left Heel']]).any() and not np.isnan(footswitch_data[0][emg_num['Left Toe']]).any():
+                            self.heel_off_detection(footswitch_data[0][emg_num['Left Heel']]**2, footswitch_data[0][emg_num['Left Toe']]**2, 2)
 
             loop_time = time.time() - tic
             real_time_to_sleep = max(0, 1 / self.read_frequency - loop_time)
@@ -52,7 +54,7 @@ class DataReceiver(QObject):
     def heel_off_detection(self, data_foot_switch_heel, data_foot_switch_toe, foot_num):
         print(f"{round(np.nanmean(np.abs(data_foot_switch_heel)))} and "
               f"{round(np.nanmean(np.abs(data_foot_switch_toe)))}")
-        if (np.nanmean(np.abs(data_foot_switch_heel)) > 30 and (np.nanmean(np.abs(data_foot_switch_toe)) < 10) and
+        if (np.nanmean(np.abs(data_foot_switch_heel)) > 225 and (np.nanmean(np.abs(data_foot_switch_toe)) < 225) and
                 self.sendStim[foot_num] is False):
             channel_to_stim = [1, 2, 3, 4] if foot_num == 1 else [5, 6, 7, 8]
             self.visualization_widget.call_start_stimulation(channel_to_stim)
@@ -60,7 +62,7 @@ class DataReceiver(QObject):
             self.numout[foot_num] = 0
             self.sendStim[foot_num] = True
 
-        if (np.nanmean(np.abs(data_foot_switch_heel)) > 30 and np.nanmean(np.abs(data_foot_switch_toe)) > 30 and
+        if (np.nanmean(np.abs(data_foot_switch_heel)) > 225 and np.nanmean(np.abs(data_foot_switch_toe)) > 225 and
                 self.sendStim[foot_num] is True):
             self.numout[foot_num]=self.numout[foot_num]+1
             if  self.numout[foot_num] > 6:
