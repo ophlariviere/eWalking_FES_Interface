@@ -6,7 +6,7 @@ from biosiglive import Server
 class QualisysDataReceiver:
     def __init__(
             self,
-            server_ip="192.168.0.2",
+            server_ip="192.168.0.1",
             server_port=7, system_rate=100):
         self.server = Server(server_ip, server_port)
         self.server.start()
@@ -41,7 +41,8 @@ class QualisysDataReceiver:
 
                 try:
                     # Traite les données analogiques
-                    _, analog_data = packet.get_analog()
+
+                    headers, analog_data = packet.get_analog()
                     if analog_data and len(analog_data) > 1:
                         analog = analog_data  # Extraction des données analogiques
 
@@ -50,7 +51,7 @@ class QualisysDataReceiver:
                         if self.phase_detection_method == "emg":
                             emg_data = []
                             for device, sample, channel in analog:
-                                if hasattr(device, 'id') and device.id == 2:
+                                if hasattr(device, 'id') and (device.id == 2):
                                     emg_data.append(channel[0])
 
                             if len(emg_data) > 0:
@@ -58,7 +59,7 @@ class QualisysDataReceiver:
                                     connection, message = self.server.client_listening()  # Non-bloquant
                                     if connection:
                                         data = {
-                                            "footswitch-data": emg_data,
+                                            "footswitch_data": emg_data,
                                         }
                                         self.server.send_data(data, connection, message)
                                 except Exception as e:
@@ -68,6 +69,7 @@ class QualisysDataReceiver:
                     # Si une erreur survient dans le traitement du paquet, on affiche l'erreur et on passe au paquet suivant
                     # print(f"⚠️ Erreur lors du traitement du paquet : {e}")
                     continue  # Passe au paquet suivant sans arrêter le programme
+
 
         except asyncio.CancelledError:
             print("⏹️ Arrêt de la boucle de réception des données.")
