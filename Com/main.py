@@ -1,6 +1,8 @@
 import sys
+#from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtWidgets import QApplication
 from Stim_P24.Stim_Interface import StimInterfaceWidget
+from Stim_P24.Stim_parameter import StimulatorSetUp
 from Received_data import DataReceiver
 import logging
 
@@ -17,7 +19,7 @@ logging.basicConfig(
 def main():
     # Définition des paramètres du serveur
     server_ip = "192.168.0.1" #   # "192.168.0.1" 127.0.0.1# Adresse IP du serveur
-    server_port = 7  # 7# 50000 Port à utiliser
+    server_port = 7  # 7  # 50000 Port à utiliser
 
     # Créez une application PyQt5
     app = QApplication(sys.argv)
@@ -25,6 +27,7 @@ def main():
     # Créez une instance du widget de visualisation
     visualization_widget = StimInterfaceWidget()
     visualization_widget.show()
+    stimulator_configuration = StimulatorSetUp()
 
     # Créez une instance de DataReceiver
     data_receiver = DataReceiver(server_ip, server_port, visualization_widget)

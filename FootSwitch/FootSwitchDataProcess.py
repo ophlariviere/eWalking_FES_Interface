@@ -5,7 +5,6 @@ from Stim_P24.Stim_parameter import StimulatorSetUp
 class FootSwitchDataProcessor:
     def __init__(self):
         self.previous_data = []
-        self.stimulator_function = StimulatorSetUp()
 
     def gait_phase_detection(self, foot_switch_data):
         if not self.previous_data:

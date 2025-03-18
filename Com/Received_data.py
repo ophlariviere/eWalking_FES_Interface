@@ -2,7 +2,7 @@ import time
 from biosiglive import TcpClient
 from PyQt5.QtCore import QObject
 import logging
-
+import numpy as np
 
 class DataReceiver(QObject):
     def __init__(
@@ -11,37 +11,61 @@ class DataReceiver(QObject):
             server_port,
             visualization_widget,
             read_frequency=100,
-            threshold=30,
     ):
         super().__init__()
         self.visualization_widget = visualization_widget
         self.server_ip = server_ip
         self.server_port = server_port
+        self.read_frequency = read_frequency
         self.tcp_client = TcpClient(
-            self.server_ip, self.server_port, read_frequency=read_frequency
+            self.server_ip, self.server_port, read_frequency=self.read_frequency
         )
-
+        logging.basicConfig(level=logging.INFO)
+        self.sendStim = {1: False, 2: False}
+        self.numout = {1: 0, 2: 0}
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
         while True:
             tic = time.time()
-            for _ in range(3):  # Tentatives multiples
+            for _ in range(3):  # Multiple attempts
                 try:
-                    received_data = self.tcp_client.get_data_from_server()
-                    break  # Si réussi, quittez la boucle
+                    # Attempt to receive data from the server
+                    received_data = self.tcp_client.get_data_from_server(command=["footswitch_data"])
+                    break  # If data is received, exit the retry loop
                 except Exception as e:
-                    logging.warning(f"Tentative échouée : {e}")
-                    time.sleep(5)  # Attente avant la prochaine tentative
-            else:
-                logging.error("Impossible de se connecter après plusieurs tentatives.")
-                continue
+                    logging.error(f"Erreur lors de la réception des données: {e}")
+                    time.sleep(1)  # Optionally wait before retrying
 
-            if self.visualization_widget.dolookneedsendstim is True:
-                self.check_stimulation(received_data)
-
-            #self.process_data(received_data)
+            if received_data["footswitch_data"]:  # Ensure we have valid data before proceeding
+                footswitch_data = received_data["footswitch_data"]
+                if self.visualization_widget.dolookneedsendstim:
+                    emg_num = self.visualization_widget.foot_emg
+                    if emg_num:
+                        if not np.isnan(footswitch_data[0][emg_num['Right Heel']]).any() and not np.isnan(footswitch_data[0][emg_num['Right Toe']]).any():
+                            self.heel_off_detection(footswitch_data[0][emg_num['Right Heel']]**2, footswitch_data[0][emg_num['Right Toe']]**2,1)
+                        if not np.isnan(footswitch_data[0][emg_num['Left Heel']]).any() and not np.isnan(footswitch_data[0][emg_num['Left Toe']]).any():
+                            self.heel_off_detection(footswitch_data[0][emg_num['Left Heel']]**2, footswitch_data[0][emg_num['Left Toe']]**2, 2)
 
             loop_time = time.time() - tic
             real_time_to_sleep = max(0, 1 / self.read_frequency - loop_time)
             time.sleep(real_time_to_sleep)
+
+    def heel_off_detection(self, data_foot_switch_heel, data_foot_switch_toe, foot_num):
+        print(f"{round(np.nanmean(np.abs(data_foot_switch_heel)))} and "
+              f"{round(np.nanmean(np.abs(data_foot_switch_toe)))}")
+        if (np.nanmean(np.abs(data_foot_switch_heel)) > 225 and (np.nanmean(np.abs(data_foot_switch_toe)) < 225) and
+                self.sendStim[foot_num] is False):
+            channel_to_stim = [1, 2, 3, 4] if foot_num == 1 else [5, 6, 7, 8]
+            self.visualization_widget.call_start_stimulation(channel_to_stim)
+            print('Send stim')
+            self.numout[foot_num] = 0
+            self.sendStim[foot_num] = True
+
+        if (np.nanmean(np.abs(data_foot_switch_heel)) > 225 and np.nanmean(np.abs(data_foot_switch_toe)) > 225 and
+                self.sendStim[foot_num] is True):
+            self.numout[foot_num]=self.numout[foot_num]+1
+            if  self.numout[foot_num] > 6:
+                self.visualization_widget.call_pause_stimulation()
+                print('Stop stim')
+                self.sendStim[foot_num] = False
