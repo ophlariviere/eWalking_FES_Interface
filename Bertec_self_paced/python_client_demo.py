@@ -1,13 +1,10 @@
 import BertecRemoteControl
 
-from time import sleep
-
 # This is a demo script to use as an example of how to start a connection to the Bertec
 # Treadmill Sof6tware, and send commands to operate your hardware.
 
 # Set up RemoteControl object, then use the start_connection method to set up the
 # network parameters and then call init_connect on the server
-
 remote = BertecRemoteControl.RemoteControl()
 res = remote.start_connection()
 print(res)
@@ -57,6 +54,5 @@ if (res is not None and res['code'] == 1):
         else:
             print(str(res))
 
-6
-
+remote.stop_connection()
 
