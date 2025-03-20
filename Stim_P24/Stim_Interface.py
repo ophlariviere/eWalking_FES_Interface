@@ -148,7 +148,7 @@ class StimInterfaceWidget(QWidget):
         self.update_button.clicked.connect(self.update_stimulation_parameter)
 
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(self.call_start_stimulation)
+        self.start_button.clicked.connect(lambda: self.call_start_stimulation([1,2,3,4,5,6,7,8]))
 
         self.stop_button = QPushButton("Arrêter Stimuleur")
         self.stop_button.clicked.connect(self.stop_stimulator)
@@ -244,23 +244,22 @@ class StimInterfaceWidget(QWidget):
                     "Stimulator non initialised. Please initialised stimulator before sending stim."
                 )
                 return
-            channels_instructions = []
-            for channel, inputs in self.stimulator_parameters.items():
-                if channel in channel_to_send:
-                    channel = Channel(
-                        no_channel=channel,
-                        name=self.stimulator_parameters[channel]["name"],
-                        amplitude=self.stimulator_parameters[channel]["amplitude"],
-                        pulse_width=self.stimulator_parameters[channel]["pulse_width"],
-                        frequency=self.stimulator_parameters[channel]["frequency"],
-                        mode=Modes.SINGLE,
-                        device_type=Device.Rehastimp24,
-                    )
-                    channels_instructions.append(channel)
+            if self.stimulator_is_sending_stim is True:
+                self.call_pause_stimulation()
+            channels_instructions = [
+            Channel(
+                no_channel=channel,
+                name=params["name"],
+                amplitude=params["amplitude"] if channel in channel_to_send else 0,
+                pulse_width=params["pulse_width"],
+                frequency=params["frequency"],
+                mode=Modes.SINGLE,
+                device_type=Device.Rehastimp24,
+            )
+            for channel, params in self.stimulator_parameters.items()
+            ]
 
             if channels_instructions:
-                if self.stimulator_is_sending_stim is True:
-                    self.call_pause_stimulation()
                 self.stimulator.init_stimulation(list_channels=channels_instructions)
                 self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
@@ -284,7 +283,7 @@ class StimInterfaceWidget(QWidget):
     def stop_stimulator(self):
         try:
             if self.stimulator:
-                self.pause_stimulation()
+                self.call_pause_stimulation()
                 self.stimulator_is_sending_stim = False
                 self.stimulator.close_port()
                 self.stimulator_is_active = False
