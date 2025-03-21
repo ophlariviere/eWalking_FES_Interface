@@ -1,6 +1,7 @@
 import asyncio
 import qtm_rt
 from biosiglive import Server
+import numpy as np
 
 
 class QualisysDataReceiver:
@@ -16,6 +17,8 @@ class QualisysDataReceiver:
         self.system_rate = system_rate
         self.qualisys_ip = "192.168.254.1"
         self.phase_detection_method = "emg"
+        self.target_rate = 100  # 100 Hz
+        self.target_period = 1 / self.target_rate  # 10 ms
 
     async def setup(self):
         """Établit la connexion avec Qualisys"""
@@ -32,8 +35,10 @@ class QualisysDataReceiver:
 
         try:
             while True:
+                start_time = asyncio.get_event_loop().time()  # Démarre le timer
+
                 # Récupère le paquet dès qu'il est disponible
-                packet = await self.interface.get_current_frame(components=['analog'])
+                packet = await self.interface.get_current_frame(components=['analogsingle'])
 
                 # Si aucun paquet n'est reçu, passe au suivant
                 if not packet:
@@ -41,35 +46,30 @@ class QualisysDataReceiver:
 
                 try:
                     # Traite les données analogiques
-
-                    headers, analog_data = packet.get_analog()
+                    headers, analog_data = packet.get_analog_single()
                     if analog_data and len(analog_data) > 1:
-                        analog = analog_data  # Extraction des données analogiques
+                        emg_data_all = analog_data[1][1]  # Extraction des données analogiques
+                        if not np.isnan(emg_data_all).any():
+                            print(f"📊 Données analogiques reçues : {emg_data_all}")  # Debugging
 
-                        print(f"📊 Données analogiques reçues : {analog}")  # Debugging
+                            if self.phase_detection_method == "emg":
+                                if len(emg_data_all) > 0:
+                                    try:
+                                        connection, message = self.server.client_listening()
+                                        if connection:
+                                            data = {"footswitch_data": emg_data_all}
+                                            self.server.send_data(data, connection, message)
+                                    except Exception as e:
+                                        print(e)
+                                        continue
 
-                        if self.phase_detection_method == "emg":
-                            emg_data = []
-                            for device, sample, channel in analog:
-                                if hasattr(device, 'id') and (device.id == 2):
-                                    emg_data.append(channel[0])
-
-                            if len(emg_data) > 0:
-                                try:
-                                    connection, message = self.server.client_listening()  # Non-bloquant
-                                    if connection:
-                                        data = {
-                                            "footswitch_data": emg_data,
-                                        }
-                                        self.server.send_data(data, connection, message)
-                                except Exception as e:
-                                    print(e)
-                                    continue
                 except Exception as e:
-                    # Si une erreur survient dans le traitement du paquet, on affiche l'erreur et on passe au paquet suivant
-                    # print(f"⚠️ Erreur lors du traitement du paquet : {e}")
                     continue  # Passe au paquet suivant sans arrêter le programme
 
+                # Timer pour maintenir la boucle à 100 Hz
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                sleep_time = max(0, self.target_period - elapsed_time)
+                await asyncio.sleep(sleep_time)
 
         except asyncio.CancelledError:
             print("⏹️ Arrêt de la boucle de réception des données.")

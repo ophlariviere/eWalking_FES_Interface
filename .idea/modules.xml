@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/Bertec_self_paced/.idea/Bertec_self_paced.iml" filepath="$PROJECT_DIR$/Bertec_self_paced/.idea/Bertec_self_paced.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/eWalking_FES_Interface.iml" filepath="$PROJECT_DIR$/.idea/eWalking_FES_Interface.iml" />
     </modules>
   </component>
