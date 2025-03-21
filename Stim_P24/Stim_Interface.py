@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QSpinBox,
     QComboBox,
-    QLabel
+    QLabel,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
@@ -89,7 +89,8 @@ class StimInterfaceWidget(QWidget):
         # Créer un bouton OK et connecter la fonction d'enregistrement
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(
-            lambda: self.save_emg_values(left_toe.value(), right_toe.value(), left_heel.value(), right_heel.value()))
+            lambda: self.save_emg_values(left_toe.value(), right_toe.value(), left_heel.value(), right_heel.value())
+        )
 
         # Ajouter le bouton au layout
         main_layout.addWidget(ok_button)
@@ -110,11 +111,11 @@ class StimInterfaceWidget(QWidget):
             "Left Toe": left_toe_value,
             "Right Toe": right_toe_value,
             "Left Heel": left_heel_value,
-            "Right Heel": right_heel_value
+            "Right Heel": right_heel_value,
         }
 
-
     """Visu Stim"""
+
     def create_channel_config_group(self):
         """Créer un groupbox pour configurer les canaux."""
         groupbox = QGroupBox("Configurer les canaux")
@@ -148,7 +149,7 @@ class StimInterfaceWidget(QWidget):
         self.update_button.clicked.connect(self.update_stimulation_parameter)
 
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(lambda: self.call_start_stimulation([1,2,3,4,5,6,7,8]))
+        self.start_button.clicked.connect(lambda: self.call_start_stimulation([1, 2, 3, 4, 5, 6, 7, 8]))
 
         self.stop_button = QPushButton("Arrêter Stimuleur")
         self.stop_button.clicked.connect(self.stop_stimulator)
@@ -169,9 +170,7 @@ class StimInterfaceWidget(QWidget):
 
     def update_channel_inputs(self):
         """Met à jour les entrées des canaux sélectionnés sous les cases à cocher."""
-        selected_channels = [
-            i + 1 for i, checkbox in enumerate(self.checkboxes) if checkbox.isChecked()
-        ]
+        selected_channels = [i + 1 for i, checkbox in enumerate(self.checkboxes) if checkbox.isChecked()]
 
         # Ajouter les nouveaux canaux sélectionnés
         for channel in selected_channels:
@@ -229,34 +228,30 @@ class StimInterfaceWidget(QWidget):
                 # Supprimer le layout lui-même
                 self.channel_config_layout.removeItem(layout)
 
-
     def activate_stimulator(self):
         if self.stimulator is None:
             self.stimulator = St(port="COM3", show_log="Status")
             self.stimulator_is_active = True
             self.num_config = 0
 
-
     def call_start_stimulation(self, channel_to_send):
         try:
             if self.stimulator is None:
-                logging.warning(
-                    "Stimulator non initialised. Please initialised stimulator before sending stim."
-                )
+                logging.warning("Stimulator non initialised. Please initialised stimulator before sending stim.")
                 return
             if self.stimulator_is_sending_stim is True:
                 self.call_pause_stimulation()
             channels_instructions = [
-            Channel(
-                no_channel=channel,
-                name=params["name"],
-                amplitude=params["amplitude"] if channel in channel_to_send else 0,
-                pulse_width=params["pulse_width"],
-                frequency=params["frequency"],
-                mode=Modes.SINGLE,
-                device_type=Device.Rehastimp24,
-            )
-            for channel, params in self.stimulator_parameters.items()
+                Channel(
+                    no_channel=channel,
+                    name=params["name"],
+                    amplitude=params["amplitude"] if channel in channel_to_send else 0,
+                    pulse_width=params["pulse_width"],
+                    frequency=params["frequency"],
+                    mode=Modes.SINGLE,
+                    device_type=Device.Rehastimp24,
+                )
+                for channel, params in self.stimulator_parameters.items()
             ]
 
             if channels_instructions:
@@ -317,7 +312,7 @@ class StimInterfaceWidget(QWidget):
                 self.stimulator_parameters[channel]["frequency"] = inputs["frequency_input"].value()
                 self.stimulator_parameters[channel]["mode"] = inputs["mode_input"].currentText()
                 self.stimulator_parameters[channel]["device_type"] = Device.Rehastimp24
-            print('Stimulator parameter updated')
+            print("Stimulator parameter updated")
 
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 
 
 def main():
-    server_ip = "169.254.171.205",
-    server_port = 7,
+    server_ip = ("169.254.171.205",)
+    server_port = (7,)
 
     app = QApplication(sys.argv)
 
@@ -30,7 +30,6 @@ def main():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.receiver.listen_for_data())
-
 
     data_thread = DataThread(data_receiver)
     data_thread.start()

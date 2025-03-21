@@ -4,6 +4,7 @@ import time
 import treadmill_remote
 from Com import QualysisRecpetion_SendTo_Server as qualisys_receiver
 
+
 def run_treadmill():
     """Démarre le contrôle du tapis roulant"""
     app = treadmill_remote.interface.QApplication([])
@@ -12,12 +13,14 @@ def run_treadmill():
     gui = treadmill_remote.TreadmillAIInterface(estimator, controller)
     gui.show()
     app.exec_()
-    #treadmill_remote.app.exec_()  # Démarre l'interface graphique du tapis
+    # treadmill_remote.app.exec_()  # Démarre l'interface graphique du tapis
+
 
 def run_qualisys():
     """Démarre l'écoute des données Qualisys en mode asynchrone"""
     processor = qualisys_receiver.QualisysDataReceiver()
     asyncio.run(processor.listen_for_data())  # Exécute la boucle asynchrone
+
 
 if __name__ == "__main__":
     # Créer les threads

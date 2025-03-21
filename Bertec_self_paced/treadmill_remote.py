@@ -17,10 +17,8 @@ DECELERATION_SMOOTHING = 0.25  # ✅ Facteur de lissage de la décélération --
 
 
 # ✅ Matrices du modèle du COP
-A = np.array([[1, dt],
-              [0, 1]])
-B = np.array([[0],
-              [1]])
+A = np.array([[1, dt], [0, 1]])
+B = np.array([[0], [1]])
 C = np.array([[1, 0]])
 
 # ✅ Matrices du LQR
@@ -34,6 +32,7 @@ Q_kalman = np.diag([0.01, 0.01])
 R_kalman = np.array([[0.05]])
 P_k = np.eye(2)
 
+
 class StateEstimator:
     def __init__(self):
         self.X_k = np.array([[CENTER_COP], [0]])
@@ -46,12 +45,12 @@ class StateEstimator:
             print("⚠️ Pas de données reçues, vérifiez la connexion.")
             return 0, CENTER_COP
 
-        fz = force_data.get('fz', 0)
-        cop = force_data.get('copy', CENTER_COP)
+        fz = force_data.get("fz", 0)
+        cop = force_data.get("copy", CENTER_COP)
         return fz, cop
 
     def kalman_update(self, cop_measured):
-        """ Mise à jour du filtre de Kalman """
+        """Mise à jour du filtre de Kalman"""
         X_k_pred = A @ self.X_k
         P_k_pred = A @ self.P_k @ A.T + Q_kalman
 
@@ -81,7 +80,7 @@ class LQGController:
         self.last_command_time = 0
 
     def compute_target_speed(self, flag_step, cop_moyen, dcom_step, fz):
-        """ ✅ Ajuste immédiatement la vitesse cible en fonction du COP """
+        """✅ Ajuste immédiatement la vitesse cible en fonction du COP"""
         if not flag_step:
             return self.v_tm
 
@@ -101,7 +100,7 @@ class LQGController:
         return v_target
 
     def update_treadmill_speed(self, v_tm_tgt):
-        """ ✅ Mise à jour fluide du tapis avec délai entre commandes """
+        """✅ Mise à jour fluide du tapis avec délai entre commandes"""
         current_time = time.time()
 
         if abs(v_tm_tgt - self.v_tm) < 0.01:
@@ -112,8 +111,14 @@ class LQGController:
 
         try:
             self.v_tm = v_tm_tgt
-            remote.run_treadmill(f"{self.v_tm:.2f}", f"{DECELERATION_SMOOTHING:.2f}", f"{DECELERATION_SMOOTHING:.2f}",
-                                 f"{self.v_tm:.2f}", f"{DECELERATION_SMOOTHING:.2f}", f"{DECELERATION_SMOOTHING:.2f}")
+            remote.run_treadmill(
+                f"{self.v_tm:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{self.v_tm:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+            )
             self.last_command_time = current_time
         except zmq.error.ZMQError as e:
             print(f"⚠️ Erreur ZMQ lors de l'envoi de la commande : {e}")
@@ -146,8 +151,8 @@ class TreadmillAIInterface(interface.TreadmillInterface):
             # Récupération des données brutes sans filtrage
             force_data = remote.get_force_data()
             if force_data:
-                copx = force_data.get('copx', 0)  # Utilisation directe des données du tapis
-                copy = force_data.get('copy', 0)
+                copx = force_data.get("copx", 0)  # Utilisation directe des données du tapis
+                copy = force_data.get("copy", 0)
 
                 # Mise à jour de l'affichage avec les vraies valeurs
                 self.update_cop(copx, copy)
@@ -162,7 +167,7 @@ class TreadmillAIInterface(interface.TreadmillInterface):
 
             self.log_data(self.step_counter, self.controller.v_tm, treadmill_acceleration, copy, cop_moyen)
 
-            self.speed_label.setText(f'Vitesse actuelle: {self.controller.v_tm:.2f} m/s')
+            self.speed_label.setText(f"Vitesse actuelle: {self.controller.v_tm:.2f} m/s")
             self.cop_x_label.setText(f"COP X : {copx:.2f} m")
             self.cop_y_label.setText(f"COP Y : {copy:.2f} m")
 

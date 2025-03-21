@@ -20,9 +20,7 @@ class StimulatorSetUp:
     def start_stimulation(self, channel_to_send):
         try:
             if self.stimulator is None:
-                logging.warning(
-                    "Stimulator non initialised. Please initialised stimulator before sending stim."
-                )
+                logging.warning("Stimulator non initialised. Please initialised stimulator before sending stim.")
                 return
             channels_instructions = []
             for channel, inputs in self.stimulator_parameters.items():

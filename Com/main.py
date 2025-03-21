@@ -1,5 +1,6 @@
 import sys
-#from concurrent.futures import ThreadPoolExecutor
+
+# from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtWidgets import QApplication
 from Stim_P24.Stim_Interface import StimInterfaceWidget
 from Stim_P24.Stim_parameter import StimulatorSetUp
@@ -11,14 +12,12 @@ from PyQt5.QtCore import QThread
 
 
 # Configure le logging
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def main():
     # Définition des paramètres du serveur
-    server_ip = "192.168.0.1" #   # "192.168.0.1" 127.0.0.1# Adresse IP du serveur
+    server_ip = "192.168.0.1"  #   # "192.168.0.1" 127.0.0.1# Adresse IP du serveur
     server_port = 7  # 7  # 50000 Port à utiliser
 
     # Créez une application PyQt5

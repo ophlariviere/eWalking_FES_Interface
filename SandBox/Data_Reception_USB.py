@@ -1,9 +1,9 @@
-
 import asyncio
 import qtm_rt
 import time
 from FootSwitch.FootSwitchDataProcess import FootSwitchDataProcessor
 from FootSwitch.FootSwitchEMGProcess import FootSwitchEMGProcessor
+
 foot_switch_processor = FootSwitchDataProcessor()
 foot_switch_emg_processor = FootSwitchEMGProcessor()
 
@@ -21,7 +21,7 @@ class DataReceiver:
         self.emg_pied_droit_heel = 1
         self.emg_pied_droit_toe = 2
         self.analog_channel_foot_switch = 16
-        self.phase_detection_method = 'emg'
+        self.phase_detection_method = "emg"
 
     async def setup(self):
         """Setup connection to QTM"""
@@ -35,7 +35,7 @@ class DataReceiver:
         await asyncio.sleep(1)
         while True:
             tic = asyncio.get_event_loop().time()
-            packet = await self.interface.get_current_frame(components=['analog'])
+            packet = await self.interface.get_current_frame(components=["analog"])
 
             # data recuperation
             """
@@ -54,7 +54,7 @@ class DataReceiver:
             # Case of FootSwitch system is directly connect to Qualisys analog canal
             if analog.__len__():
                 if analog[1] and self.phase_detection_method == "analog":
-                    foot_switch_canal = self.analog_channel_foot_switch-1
+                    foot_switch_canal = self.analog_channel_foot_switch - 1
                     foot_switch_processor.gait_phase_detection(foot_switch_data=analog[1][foot_switch_canal][2][0])
 
                 # Case of FootSwitch are connected to emg
@@ -65,8 +65,9 @@ class DataReceiver:
                         if device.id == 2:
                             emg_data.append(channel[0])
                     if emg_data.__len__() > 0:
-                        foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_droit_heel-1],
-                                                                 emg_data[self.emg_pied_droit_toe-1], 1)
+                        foot_switch_emg_processor.heel_off_detection(
+                            emg_data[self.emg_pied_droit_heel - 1], emg_data[self.emg_pied_droit_toe - 1], 1
+                        )
                 """
                 foot_switch_emg_processor.heel_off_detection(emg_data[self.emg_pied_gauche_heel-1],
                                                              emg_data[self.emg_pied_gauche_toe-1], 2)
