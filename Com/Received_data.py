@@ -3,6 +3,7 @@ from biosiglive import TcpClient
 from PyQt5.QtCore import QObject
 import logging
 import numpy as np
+from collections import deque
 
 
 class DataReceiver(QObject):
@@ -26,30 +27,33 @@ class DataReceiver(QObject):
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
+        buffer = deque(maxlen=6)
         while True:
             tic = time.time()
             for _ in range(3):  # Multiple attempts
                 try:
                     # Attempt to receive data from the server
                     received_data = self.tcp_client.get_data_from_server(
-                        command=["footswitch_data", "force", "mks", "mks_name"]
+                        command=["footswitch_data"]
                     )
 
                     # Stim gestion
                     if received_data["footswitch_data"]:  # Ensure we have valid data before proceeding
-                        footswitch_data = received_data["footswitch_data"]
+                        footswitch_data_oneframe = received_data["footswitch_data"]
+                        buffer.append(footswitch_data_oneframe)
                         if self.visualization_widget.dolookneedsendstim:
                             emg_num = self.visualization_widget.foot_emg
                             if emg_num:
+                                footswitch_data = list(zip(*buffer))
                                 info_feet = {
                                     "right": self.heel_off_detection(
-                                        footswitch_data[emg_num["Right Heel"] - 1] ** 2,
-                                        footswitch_data[emg_num["Right Toe"] - 1] ** 2,
+                                        footswitch_data[emg_num["Right Heel"] - 1],
+                                        footswitch_data[emg_num["Right Toe"] - 1],
                                         1,
                                     ),
                                     "left": self.heel_off_detection(
-                                        footswitch_data[emg_num["Left Heel"] - 1] ** 2,
-                                        footswitch_data[emg_num["Left Toe"] - 1] ** 2,
+                                        footswitch_data[emg_num["Left Heel"] - 1],
+                                        footswitch_data[emg_num["Left Toe"] - 1],
                                         2,
                                     ),
                                 }
@@ -57,16 +61,12 @@ class DataReceiver(QObject):
                                 # Gestion de la stimulation en fonction des états détectés
                                 self.manage_stimulation(info_feet)
 
-                    if received_data["mks"] and self.visualization_widget.doprocessIK:
+                    '''if received_data["mks"] and self.visualization_widget.doprocessIK:
                         # TODO add cycle cut and process IK
-                        print("todo")
+                        print("todo")'''
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
-                    time.sleep(1)  # Optionally wait before retrying
-
-            loop_time = time.time() - tic
-            real_time_to_sleep = max(0, 1 / self.read_frequency - loop_time)
-            time.sleep(real_time_to_sleep)
+                    time.sleep(0.005)  # Optionally wait before retrying
 
     def manage_stimulation(self, info_feet):
         """Gère l'activation ou l'arrêt de la stimulation en fonction des états des pieds."""
@@ -74,39 +74,38 @@ class DataReceiver(QObject):
 
         if right == "StarStim" and left == "StarStim":
             self.visualization_widget.call_start_stimulation([1, 2, 3, 4, 5, 6, 7, 8])
+            self.sendStim[1] = True
+            self.sendStim[2] = True
+            print("Stim send to all canal")
         elif right == "StarStim" and left in ["StopStim", "nothing"]:
             self.visualization_widget.call_start_stimulation([1, 2, 3, 4])
+            self.sendStim[1] = True
+            self.sendStim[2] = False
+            print("Stim send to right")
         elif left == "StarStim" and right in ["StopStim", "nothing"]:
             self.visualization_widget.call_start_stimulation([5, 6, 7, 8])
+            self.sendStim[1] = False
+            self.sendStim[2] = True
+            print("Stim send to left")
         elif right == "StopStim" and left in ["StopStim", "nothing"]:
             self.visualization_widget.call_pause_stimulation()
+            self.sendStim[1] = False
+            self.sendStim[2] = False
+            print("Stim stop")
         elif left == "StopStim" and right in ["StopStim", "nothing"]:
             self.visualization_widget.call_pause_stimulation()
+            self.sendStim[1] = False
+            self.sendStim[2] = False
+            print("Stim stop")
 
     def heel_off_detection(self, data_foot_switch_heel, data_foot_switch_toe, foot_num):
-        print(f"{round(data_foot_switch_heel)} and {round(data_foot_switch_toe)}")
+        #print(f"{round(data_foot_switch_heel)} and {round(data_foot_switch_toe)}")
         info_etat = "nothing"
-        if (data_foot_switch_heel > 360000) and (data_foot_switch_toe < 300) and (self.sendStim[foot_num] is False):
-            channel_to_stim = [1, 2, 3, 4] if foot_num == 1 else [5, 6, 7, 8]
-            self.numin[foot_num] = self.numin[foot_num] + 1
-            if self.numin[foot_num] > 2:
-                # self.visualization_widget.call_start_stimulation(channel_to_stim)
-                print("Send stim")
-                self.numout[foot_num] = 0
-                self.sendStim[foot_num] = True
+        print(f"{np.std(data_foot_switch_heel)} and {np.std(data_foot_switch_toe)}")
+        if np.std(data_foot_switch_heel) > 500 and np.std(data_foot_switch_toe) < 500 and self.sendStim[foot_num] is False:
                 info_etat = "StarStim"
 
-        if (
-            np.nanmean(np.abs(data_foot_switch_heel)) > 300
-            and np.nanmean(np.abs(data_foot_switch_toe)) > 360000
-            and self.sendStim[foot_num] is True
-        ):
-            self.numout[foot_num] = self.numout[foot_num] + 1
-            if self.numout[foot_num] > 2:
-                # self.visualization_widget.call_pause_stimulation()
-                print("Stop stim")
-                self.numin[foot_num] = 0
-                self.sendStim[foot_num] = False
+        if np.std(data_foot_switch_heel) > 500 and np.std(data_foot_switch_toe) > 500 and self.sendStim[foot_num] is True:
                 info_etat = "StopStim"
 
         return info_etat
