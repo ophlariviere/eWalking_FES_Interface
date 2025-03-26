@@ -4,6 +4,7 @@ from PyQt5.QtCore import QObject
 import logging
 from collections import deque
 import numpy as np
+from scipy.signal import butter, filtfilt
 
 
 class DataReceiver(QObject):
@@ -26,34 +27,24 @@ class DataReceiver(QObject):
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
-        buffer = deque(maxlen=10)
+        buffer = deque(maxlen=100)
         while True:
             for _ in range(3):  # Multiple attempts
                 try:
                     # Attempt to receive data from the server
                     received_data = self.tcp_client.get_data_from_server(
-                        command=["footswitch_data"]
+                        command=["force"]
                     )
 
                     # Stim gestion
-                    if received_data["footswitch_data"]:  # Ensure we have valid data before proceeding
-                        footswitch_data_oneframe = received_data["footswitch_data"]
-                        buffer.append(footswitch_data_oneframe)
+                    if received_data["force"]:  # Ensure we have valid data before proceeding
+                        force_data_oneframe = received_data["force"]
+                        buffer.append(force_data_oneframe)
                         if self.visualization_widget.dolookneedsendstim:
-                            emg_num = self.visualization_widget.foot_emg
-                            if emg_num:
-                                footswitch_data = list(zip(*buffer))
+                                force_data = list(zip(*buffer))
                                 info_feet = {
-                                    "right": self.detect_phase_emg(
-                                        footswitch_data[emg_num["Right Heel"] - 1],
-                                        footswitch_data[emg_num["Right Toe"] - 1],
-                                        1,
-                                    ),
-                                    "left": self.detect_phase_emg(
-                                        footswitch_data[emg_num["Left Heel"] - 1],
-                                        footswitch_data[emg_num["Left Toe"] - 1],
-                                        2,
-                                    ),
+                                    "right": self.detect_phase_force(force_data[1],1),
+                                    "left": self.detect_phase_force(force_data[2],2),
                                 }
 
                                 # Gestion de la stimulation en fonction des états détectés
@@ -66,18 +57,34 @@ class DataReceiver(QObject):
                     logging.error(f"Erreur lors de la réception des données: {e}")
                     time.sleep(0.005)  # Optionally wait before retrying
 
-
-    def detect_phase_emg(self, data_heel, data_toe, foot_num):
+    def detect_phase_force(self, data_force, foot_num):
         info = "nothing"
-        data_heel=data_heel-np.mean(data_heel)
-        data_toe = data_toe - np.mean(data_toe)
-        if np.mean(np.array(data_heel[:]) ** 2) > 300 and np.mean(np.array(data_toe[:]) ** 2) < 200 and not self.sendStim[foot_num]:
-            info = "StartStim"
-            self.sendStim[foot_num] = True
-        data_toe = data_toe - np.mean(data_toe)
-        if np.mean(np.array(data_toe[:]) ** 2) > 300  and self.sendStim[foot_num] is True:
+
+        b, a = butter(2, 10 / (0.5 * 1000), btype='low')
+        force_ap_filter = filtfilt(b, a, data_force[1])  # Antéropostérieure
+        force_vert_filter = filtfilt(b, a, data_force[2])  # Verticale
+
+        # On prend la dernière valeur pour décider (tu peux aussi faire une moyenne glissante)
+        force_ap_last = force_ap_filter  # dernier petit segment
+        force_vert_last = np.mean(force_vert_filter)
+
+        # Si le pied est en appui (grande force verticale)
+        if force_vert_last > 20:
+            # Calcul de la dérivée (variation de la force antéropostérieure)
+            derive_force_ap = np.diff(force_ap_last)
+
+            # Détection de changement de signe (inversion de direction)
+            sign_change = np.any(derive_force_ap[:-1] * derive_force_ap[1:] < 0)
+
+            if sign_change and not self.sendStim[foot_num]:
+                info = "StartStim"
+                self.sendStim[foot_num] = True
+
+        # Si le pied commence à se lever (faible force verticale)
+        if force_vert_last < 50 and self.sendStim[foot_num]:
             info = "StopStim"
             self.sendStim[foot_num] = False
+
         return info
 
     def manage_stimulation(self, info_feet):
