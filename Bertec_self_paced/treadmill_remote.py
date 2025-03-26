@@ -9,13 +9,14 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from scipy.signal import butter, filtfilt
 from collections import deque
+import csv
 
 # ✅ Initialisation de la communication avec le tapis
 remote = BertecRemoteControl.RemoteControl()
 remote.start_connection()
 
 CENTER_COP = 0.8  # ✅ Centre du tapis à 0.7
-dt = 0.01  # Intervalle de temps (10 ms)
+dt = 0.002  # Intervalle de temps (10 ms)
 COMMAND_DELAY = 0.1  # ✅ Délai entre envois de commandes  --> de base à 0.2
 DECELERATION_SMOOTHING = 0.25  # ✅ Facteur de lissage de la décélération --> de base à 0.2
 
@@ -220,38 +221,40 @@ class PropulsionDetector(threading.Thread):
             time.sleep(dt)  # 10 ms
 
     def detect_phase(self, side, force_value_y, force_value_z):
-        mass = 500
+        mass = 600
         fs = 1/dt
-        b, a = butter(2, 10 / (0.5 * fs), btype='low')
-        force_ap_filter = filtfilt(b, a, force_value_y)
-        force_vert_filter = filtfilt(b, a, force_value_z)
-        force_vert_last = force_vert_filter[-1:]
+        taille_fenetre = 5
+        force_ap_filter_last = np.mean(force_value_y[-taille_fenetre:])
+        force_ap_filter_previous = np.mean(force_value_y[-taille_fenetre-2:-2])
+        force_vert_last = np.mean(force_value_z[-taille_fenetre:])
 
-        if np.abs(force_vert_last) > 0.3*mass:
-
-            if force_ap_filter[-2] > force_ap_filter[-1] and self.sendStim[side] is False:
+        if np.abs(force_vert_last) > 0.7 * mass:
+            if (force_value_y[-1] < 0.05 * mass
+                    and force_ap_filter_previous > force_value_y[-1]
+                    and self.sendStim[side] is False):
+                print(force_value_y[-1])
                 self.sendStim[side] = True
                 if side == "right":
                     self.phase_right = "propulsion"
-                    print("➡️ Heel-off détecté jambe DROITE")
+                    # print("➡️ Heel-off détecté jambe DROITE")
                     if self.plotter:
                         self.plotter.add_trigger("right", "heel-off")
                 else:
                     self.phase_left = "propulsion"
-                    print("⬅️ Heel-off détecté jambe GAUCHE")
+                    # print("⬅️ Heel-off détecté jambe GAUCHE")
                     if self.plotter:
                         self.plotter.add_trigger("left", "heel-off")
 
-        if (np.abs(force_vert_filter[-1]) < 0.1*mass) and self.sendStim[side] is True:
+        if (np.abs(force_vert_last) < 0.1 * mass) and self.sendStim[side] is True:
             self.sendStim[side] = False
             if side == "right":
                 self.phase_right = "fin"
-                print("➡️ Toe-off détecté jambe DROITE")
+                #print("➡️ Toe-off détecté jambe DROITE")
                 if self.plotter:
                     self.plotter.add_trigger("right", "toe-off")
             else:
                 self.phase_left = "fin"
-                print("⬅️ Toe-off détecté jambe GAUCHE")
+                # print("⬅️ Toe-off détecté jambe GAUCHE")
                 if self.plotter:
                     self.plotter.add_trigger("left", "toe-off")
 
