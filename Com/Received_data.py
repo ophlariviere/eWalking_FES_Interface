@@ -58,7 +58,7 @@ class DataReceiver(QObject):
                                 self.manage_stimulation(info_feet)
 
                     if received_data["mks"] and self.visualization_widget.doprocessIK:
-                        # TODO add cycle cut and process IK
+                        # TODO add cycle cut and process IK add interface 
                         print("todo")
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
