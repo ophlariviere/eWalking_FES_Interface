@@ -1,9 +1,8 @@
 from threading import Timer
 import zmq
 
-
 class RemoteControl:
-    SUCCESS = (1,)
+    SUCCESS = 1,
     PARSE_ERROR = -32700
     INVALID_REQUEST = -32600
     METHOD_NOT_FOUND = -32601
@@ -18,11 +17,9 @@ class RemoteControl:
 
     VERSION = "v1"
 
-    def start_connection(
-        self, server_ip="127.0.0.1", rpc_port="5555", data_port="5556", client_ip="127.0.0.1", client_port="5560"
-    ):
+    def start_connection(self, server_ip="127.0.0.1", rpc_port="5555", data_port="5556", client_ip="127.0.0.1", client_port="5560"):
         # If any previous connections are running, don't run this method
-        if "connected" in globals() and self.connected:
+        if ('connected' in globals() and self.connected):
             return
 
         # Set up ZMQ context and other connection parameters
@@ -37,29 +34,29 @@ class RemoteControl:
         self.data_port = data_port
         self.heart_ip = client_ip
         self.heart_port = client_port
-
+        
         # Request socket used for all RPC commands to the server
         self.req_socket = self.context.socket(zmq.REQ)
         self.req_socket.setsockopt(zmq.RCVTIMEO, self.DEFAULT_TIMEOUT)
         self.req_socket.connect("tcp://" + self.server_ip + ":" + rpc_port)
         # Heartbeat socket used to detect if connection between client and server has terminated
-        # self.heart_socket = self.context.socket(zmq.ROUTER)
-        # self.heart_socket.bind("tcp://" + self.heart_ip + ":" + self.heart_port)
+        #self.heart_socket = self.context.socket(zmq.ROUTER)
+        #self.heart_socket.bind("tcp://" + self.heart_ip + ":" + self.heart_port)
         # Subscriber socket used to receive force data from software
         self.sub_socket = self.context.socket(zmq.SUB)
         self.sub_socket.setsockopt(zmq.CONFLATE, 1)
         self.sub_socket.connect("tcp://" + self.server_ip + ":" + data_port)
-        self.sub_socket.subscribe("")
+        self.sub_socket.subscribe('')
         # Send initial connection request to see if our connection is good
         init_res = self.send_init_connect(self.heart_ip, self.heart_port)
 
         # Wait for response with default timeout value. If we don't get a response
         # back from send_init_connect
-        if init_res is not None and init_res["code"] == 1:
+        if (init_res is not None and init_res['code'] == 1):
             self.sub_poller = zmq.Poller()
             self.sub_poller.register(self.sub_socket, zmq.POLLIN)
-            # self.sub_poller.register(self.heart_socket, zmq.POLLIN)
-            # self.heart_timer = Timer(1, self.get_heartbeat_resp)
+            #self.sub_poller.register(self.heart_socket, zmq.POLLIN)
+            #self.heart_timer = Timer(1, self.get_heartbeat_resp)
             # self.heart_timer.start()
             self.connected = True
 
@@ -70,7 +67,7 @@ class RemoteControl:
         return None
 
     def stop_connection(self):
-        if "started" not in globals() or not self.started:
+        if ('started' not in globals() or not self.started):
             return
 
         self.started = False
@@ -80,17 +77,23 @@ class RemoteControl:
         self.req_socket.close()
         self.sub_socket.disconnect("tcp://" + self.server_ip + ":" + self.data_port)
         self.sub_socket.close()
-        # self.heart_socket.unbind("tcp://" + self.heart_ip + ":" + self.heart_port)
-        # self.heart_socket.close()
+        #self.heart_socket.unbind("tcp://" + self.heart_ip + ":" + self.heart_port)
+        #self.heart_socket.close()
 
         # if ('heart_timer' in globals()):
         #     self.heart_timer.cancel()
-        if "sub_poller" in globals():
+        if ('sub_poller' in globals()):
             self.sub_poller.unregister(self.sub_socket)
-            # self.sub_poller.unregister(self.heart_socket)
+            #self.sub_poller.unregister(self.heart_socket)
+
 
     def get_json_request_message(self, method, params):
-        json_message = {"version": self.VERSION, "id": self.id, "method": method, "params": params}
+        json_message = {
+            'version': self.VERSION,
+            "id": self.id,
+            "method": method,
+            "params": params
+        }
 
         return json_message
 
@@ -117,37 +120,40 @@ class RemoteControl:
         else:
             res = None
 
-        if res is None:
+        if (res is None):
             if self.heart_attempts >= self.HEARTBEAT_MAX_ATTEMPTS:
                 self.stop_connection()
         else:
             self.heart_attempts = 0
 
-        if self.connected:
+        if (self.connected):
             self.heart_timer.cancel()
             self.heart_timer = Timer(1, self.get_heartbeat_resp)
             self.heart_timer.start()
 
     def send_init_connect(self, ip, port):
-        params = {"ip": ip, "port": port}
-        json_msg = self.get_json_request_message("InitConnect", params)
+        params = {
+            'ip': ip,
+            'port': port
+        }
+        json_msg = self.get_json_request_message('InitConnect', params)
         res = self.send_json_message(json_msg)
         return res
 
     def run_treadmill(self, left_vel, left_accel, left_decel, right_vel, right_accel, right_decel):
         def format_bertec(value):
-            return str(value).replace(".", ",")  # Convertit 1.5 → '1,5'
+            return str(value).replace('.', ',')  # Convertit 1.5 → '1,5'
 
         params = {
-            "leftVel": format_bertec(left_vel),
-            "leftAccel": format_bertec(left_accel),
-            "leftDecel": format_bertec(left_decel),
-            "rightVel": format_bertec(right_vel),
-            "rightAccel": format_bertec(right_accel),
-            "rightDecel": format_bertec(right_decel),
+            'leftVel': format_bertec(left_vel),
+            'leftAccel': format_bertec(left_accel),
+            'leftDecel': format_bertec(left_decel),
+            'rightVel': format_bertec(right_vel),
+            'rightAccel': format_bertec(right_accel),
+            'rightDecel': format_bertec(right_decel),
         }
 
-        json_msg = self.get_json_request_message("RunTreadmill", params)
+        json_msg = self.get_json_request_message('RunTreadmill', params)
         res = self.send_json_message(json_msg)
         return res
 
@@ -168,34 +174,34 @@ class RemoteControl:
 
     def run_incline(self, incline_angle):
         params = {
-            "inclineAngle": incline_angle,
+            'inclineAngle': incline_angle,
         }
 
-        json_msg = self.get_json_request_message("RunIncline", params)
+        json_msg = self.get_json_request_message('RunIncline', params)
         res = self.send_json_message(json_msg)
         return res
 
     def is_treadmill_moving(self):
         params = {}
 
-        json_msg = self.get_json_request_message("IsTreadmillMoving", params)
+        json_msg = self.get_json_request_message('IsTreadmillMoving', params)
         res = self.send_json_message(json_msg)
         return res
 
     def is_incline_moving(self):
         params = {}
 
-        json_msg = self.get_json_request_message("IsInclineMoving", params)
+        json_msg = self.get_json_request_message('IsInclineMoving', params)
         res = self.send_json_message(json_msg)
         return res
-
+    
     def is_client_authenticated(self):
         params = {}
 
-        json_msg = self.get_json_request_message("IsClientAuthenticated", params)
+        json_msg = self.get_json_request_message('IsClientAuthenticated', params)
         res = self.send_json_message(json_msg)
         return res
-
+        
     def send_json_message(self, msg):
         print("Sending message: " + str(msg))
         try:
@@ -218,15 +224,17 @@ class RemoteControl:
         right_decel = input("Input right deceleration: ")
 
         return {
-            "leftVel": left_vel,
-            "leftAccel": left_accel,
-            "leftDecel": left_decel,
-            "rightVel": right_vel,
-            "rightAccel": right_accel,
-            "rightDecel": right_decel,
-        }
+                'leftVel': left_vel,
+                'leftAccel': left_accel,
+                'leftDecel': left_decel,
+                'rightVel': right_vel,
+                'rightAccel': right_accel,
+                'rightDecel': right_decel,
+            }
 
     def get_run_incline_user_input(self):
         incline_angle = input("Input incline angle: ")
 
-        return {"inclineAngle": incline_angle}
+        return {
+            'inclineAngle': incline_angle
+        }

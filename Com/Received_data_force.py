@@ -41,14 +41,14 @@ class DataReceiver(QObject):
                         force_data_oneframe = received_data["force"]
                         buffer.append(force_data_oneframe)
                         if self.visualization_widget.dolookneedsendstim:
-                                force_data = list(zip(*buffer))
-                                info_feet = {
-                                    "right": self.detect_phase_force(force_data[1],1),
-                                    "left": self.detect_phase_force(force_data[2],2),
-                                }
+                            force_data = list(zip(*buffer))
+                            info_feet = {
+                                "right": self.detect_phase_force(force_data[1], force_data[2], 1),
+                                "left": self.detect_phase_force(force_data[10], force_data[11], 2),
+                            }
 
-                                # Gestion de la stimulation en fonction des états détectés
-                                self.manage_stimulation(info_feet)
+                            # Gestion de la stimulation en fonction des états détectés
+                            self.manage_stimulation(info_feet)
 
                     '''if received_data["mks"] and self.visualization_widget.doprocessIK:
                         # TODO add cycle cut and process IK
@@ -57,31 +57,41 @@ class DataReceiver(QObject):
                     logging.error(f"Erreur lors de la réception des données: {e}")
                     time.sleep(0.005)  # Optionally wait before retrying
 
-    def detect_phase_force(self, data_force, foot_num):
+    def detect_phase_force(self, data_force_ap, data_force_v, foot_num):
         info = "nothing"
-
-        b, a = butter(2, 10 / (0.5 * 1000), btype='low')
-        force_ap_filter = filtfilt(b, a, data_force[1])  # Antéropostérieure
-        force_vert_filter = filtfilt(b, a, data_force[2])  # Verticale
+        subject_mass = 500
+        fs_camera = 100
+        fs_pf = 1000
+        ratio = fs_pf/fs_camera
+        b, a = butter(2, 10 / (0.5 * fs_pf), btype='low')
+        force_ap_filter = filtfilt(b, a, data_force_ap)  # Antéropostérieure
+        force_vert_filter = filtfilt(b, a, data_force_v)  # Verticale
 
         # On prend la dernière valeur pour décider (tu peux aussi faire une moyenne glissante)
-        force_ap_last = force_ap_filter  # dernier petit segment
-        force_vert_last = np.mean(force_vert_filter)
+        force_ap_last = np.mean(force_ap_filter[-ratio:])  # dernier petit segment
+        force_ap_previous = np.mean(force_ap_filter[-2*ratio:-ratio])
+        force_vert_last = np.mean(force_vert_filter[-ratio:])
 
         # Si le pied est en appui (grande force verticale)
-        if force_vert_last > 20:
-            # Calcul de la dérivée (variation de la force antéropostérieure)
-            derive_force_ap = np.diff(force_ap_last)
+        if force_vert_last > 0.7 * subject_mass:
+            if (force_ap_last < 0.1 * subject_mass
+                    and force_ap_previous > force_ap_last
+                    and self.sendStim[foot_num] is False):
 
-            # Détection de changement de signe (inversion de direction)
-            sign_change = np.any(derive_force_ap[:-1] * derive_force_ap[1:] < 0)
-
-            if sign_change and not self.sendStim[foot_num]:
-                info = "StartStim"
-                self.sendStim[foot_num] = True
+                """
+                # Calcul de la dérivée (variation de la force antéropostérieure)
+                derive_force_ap = np.diff(force_ap_last)
+    
+                # Détection de changement de signe (inversion de direction)
+                sign_change = np.any(derive_force_ap[:-1] * derive_force_ap[1:] < 0)
+    
+                if sign_change and not self.sendStim[foot_num]:
+                    info = "StartStim"
+                    self.sendStim[foot_num] = True
+                """
 
         # Si le pied commence à se lever (faible force verticale)
-        if force_vert_last < 50 and self.sendStim[foot_num]:
+        if force_vert_last < 0.05 * subject_mass and self.sendStim[foot_num]:
             info = "StopStim"
             self.sendStim[foot_num] = False
 
