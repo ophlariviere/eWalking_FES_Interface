@@ -43,7 +43,7 @@ class StimInterfaceWidget(QWidget):
         layout = QVBoxLayout(self)
 
         # Configuration channel emg
-        layout.addWidget(self.create_emg_num_for_foot())
+        # layout.addWidget(self.create_emg_num_for_foot())
 
         # Configuration des canaux de stimulation
         layout.addWidget(self.create_channel_config_group())

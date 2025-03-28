@@ -4,7 +4,7 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from Stim_P24.Stim_Interface import StimInterfaceWidget
 from Stim_P24.Stim_parameter import StimulatorSetUp
-from Received_data import DataReceiver
+from Received_data_force import DataReceiver
 import logging
 
 # Utilisez QThread pour exécuter DataReceiver en parallèle
