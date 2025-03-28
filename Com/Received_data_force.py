@@ -29,6 +29,7 @@ class DataReceiver(QObject):
         self.last_channels = []
 
         # Création des 2 plots (un pour chaque pied)
+        self.event_log=deque(maxlen=100)
         self.plot_widget_right = pg.PlotWidget(title="Right Foot Events")
         self.plot_curve_right = self.plot_widget_right.plot([], [], pen=None, symbol='o', symbolBrush='b')
 
@@ -46,42 +47,53 @@ class DataReceiver(QObject):
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
-        buffer = deque(maxlen=100)
+        force_data_buffer = [deque(maxlen=30) for _ in range(18)]
+
         while True:
             for _ in range(3):  # Multiple attempts
                 try:
-                    # Attempt to receive data from the server
-                    received_data = self.tcp_client.get_data_from_server(
-                        command=["force"]
-                    )
+                    if self.visualization_widget.dolookneedsendstim:
+                        received_data = self.tcp_client.get_data_from_server(command=["force"])
 
-                    # Stim gestion
-                    if received_data["force"]:  # Ensure we have valid data before proceeding
-                        force_data_oneframe = received_data["force"]
-                        buffer.append(force_data_oneframe)
-                        if self.visualization_widget.dolookneedsendstim:
-                            force_data = list(zip(*buffer))
-                            info_feet = {
-                                "right": self.detect_phase_force(force_data[1], force_data[2], 1),
-                                "left": self.detect_phase_force(force_data[10], force_data[11], 2),
-                            }
+                        if received_data["force"]:  # Vérifie que des données sont présentes
+                            force_data_oneframe = received_data["force"]
+                            if force_data_oneframe[0].size > 0:
+                                for i in range(18):
+                                    force_data_buffer[i].append(force_data_oneframe[i])
 
-                            # Gestion de la stimulation en fonction des états détectés
-                            # self.manage_stimulation(info_feet)
+                        if all(len(buf) == 30 for buf in force_data_buffer):
+                           print('test_phase')
+                           info_feet = {
+                               "right": self.detect_phase_force(
+                               np.concatenate(force_data_buffer[1]),
+                               np.concatenate(force_data_buffer[2]),
+                               1),
+                               "left": self.detect_phase_force(
+                                   np.concatenate(force_data_buffer[10]),
+                                   np.concatenate(force_data_buffer[11]),
+                                   2),
+                           }
+                           # Gestion de la stimulation (décommenter si tu veux l'activer)
+                           self.manage_stimulation(info_feet)
 
-                    '''if received_data["mks"] and self.visualization_widget.doprocessIK:
-                        # TODO add cycle cut and process IK
-                        print("todo")'''
+                        '''
+                        if received_data["mks"] and self.visualization_widget.doprocessIK:
+                            # TODO: découper les cycles et traiter l'IK
+                            print("todo")
+                        '''
+
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
-                    time.sleep(0.005)  # Optionally wait before retrying
+                    time.sleep(0.005)  # Petite pause avant la tentative suivante
+
+                time.sleep(0.01)
 
     def detect_phase_force(self, data_force_ap, data_force_v, foot_num):
         info = "nothing"
         subject_mass = 500
         fs_camera = 100
         fs_pf = 1000
-        ratio = fs_pf/fs_camera
+        ratio = int(fs_pf/fs_camera)
         b, a = butter(2, 10 / (0.5 * fs_pf), btype='low')
         force_ap_filter = filtfilt(b, a, data_force_ap)  # Antéropostérieure
         force_vert_filter = filtfilt(b, a, data_force_v)  # Verticale
@@ -152,7 +164,7 @@ class DataReceiver(QObject):
         if not self.event_log:
             return
 
-        times_right, y_right = [], []
+        times_right, y_right = [0:], []
         times_left, y_left = [], []
 
         for t, label in self.event_log:
