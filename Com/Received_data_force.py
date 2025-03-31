@@ -21,13 +21,14 @@ class DataReceiver(QObject):
         self.sendStim = {1: False, 2: False}
         self.last_channels = []
         self.propulsion_time = None
+        self.last_foot_stim = None
 
-        self.event_log = deque(maxlen=1000)
-        self.fyr_buffer = deque(maxlen=1000)
-        self.fyl_buffer = deque(maxlen=1000)
-        self.fzr_buffer = deque(maxlen=1000)
-        self.fzl_buffer = deque(maxlen=1000)
-        self.time_buffer = deque(maxlen=1000)
+        self.event_log = deque(maxlen=500)
+        self.fyr_buffer = deque(maxlen=500)
+        self.fyl_buffer = deque(maxlen=500)
+        self.fzr_buffer = deque(maxlen=500)
+        self.fzl_buffer = deque(maxlen=500)
+        self.time_buffer = deque(maxlen=500)
 
         # Plots forces antéropostérieures
         self.force_plot_right = pg.PlotWidget(title="Right AP Force")
@@ -47,7 +48,7 @@ class DataReceiver(QObject):
         # Timer pour mise à jour régulière
         self.plot_timer = QTimer()
         self.plot_timer.timeout.connect(self.update_plot)
-        self.plot_timer.start(10)
+        self.plot_timer.start(100)
         self.period = 0.01
 
     def start_receiving(self):
@@ -66,22 +67,23 @@ class DataReceiver(QObject):
                             if force_data_oneframe[0].size > 0:
                                 timestamp = datetime.now().timestamp()
                                 self.time_buffer.append(timestamp)
-                                self.fyr_buffer.append(np.mean(force_data_oneframe[1]))
-                                self.fzr_buffer.append(np.mean(force_data_oneframe[2]))
-                                self.fyl_buffer.append(np.mean(force_data_oneframe[10]))
-                                self.fzl_buffer.append(np.mean(force_data_oneframe[11]))
+                                self.fyl_buffer.append(np.mean(force_data_oneframe[1]))
+                                self.fzl_buffer.append(np.mean(force_data_oneframe[2]))
+                                self.fyr_buffer.append(np.mean(force_data_oneframe[10]))
+                                self.fzr_buffer.append(np.mean(force_data_oneframe[11]))
 
-                            info_feet = {
-                                "right": self.detect_phase_force(
-                                    self.fyr_buffer,
-                                    self.fzr_buffer,
-                                    1),
-                                "left": self.detect_phase_force(
-                                    self.fyl_buffer,
-                                    self.fzl_buffer,
-                                    2),
-                            }
-                            # self.manage_stimulation(info_feet)
+                            if len(self.fyr_buffer) > 60:
+                                info_feet = {
+                                    "right": self.detect_phase_force(
+                                        self.fyr_buffer,
+                                        self.fzr_buffer,
+                                        1),
+                                    "left": self.detect_phase_force(
+                                        self.fyl_buffer,
+                                        self.fzl_buffer,
+                                        2),
+                                }
+                                self.manage_stimulation(info_feet)
 
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
@@ -97,6 +99,7 @@ class DataReceiver(QObject):
         fs_camera = 100
         fs_pf = 1000
         ratio = int(fs_pf / fs_camera)
+        lastsecond_force_vert =np.array(list(data_force_v)[-60:])
 
         force_ap_last = data_force_ap[-1]
         force_ap_previous = data_force_ap[-2]
@@ -104,17 +107,18 @@ class DataReceiver(QObject):
 
         current_time = datetime.now().timestamp()
 
-        if force_vert_last > 0.7 * subject_mass:
+        if force_vert_last > 0.7 * subject_mass and  any(lastsecond_force_vert < 50):
             if (force_ap_last < 0.1 * subject_mass
                     and force_ap_previous > force_ap_last
-                    and not self.sendStim[foot_num]):
+                    and not self.sendStim[foot_num]
+                    and self.last_foot_stim is not foot_num):
                 info = "StartStim"
                 print('heel off')
                 self.event_log.append((current_time, f"HeelOff_{foot_num}"))
-                # self.last_heel_time =
                 self.sendStim[foot_num] = True
+                self.last_foot_stim = foot_num
 
-        if force_vert_last < 0.05 * subject_mass and self.sendStim[foot_num]:
+        if (force_vert_last < 0.05 * subject_mass or all(lastsecond_force_vert>50)) and self.sendStim[foot_num]:
             info = "StopStim"
             self.event_log.append((current_time, f"ToeOff_{foot_num}"))
             self.sendStim[foot_num] = False
