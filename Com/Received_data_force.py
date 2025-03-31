@@ -72,15 +72,15 @@ class DataReceiver(QObject):
                                 self.fyr_buffer.append(np.mean(force_data_oneframe[10]))
                                 self.fzr_buffer.append(np.mean(force_data_oneframe[11]))
 
-                            if len(self.fyr_buffer) > 60:
+                            if len(self.fyr_buffer) > 40:
                                 info_feet = {
                                     "right": self.detect_phase_force(
                                         self.fyr_buffer,
-                                        self.fzr_buffer,
+                                        self.fzr_buffer, self.fzl_buffer,
                                         1),
                                     "left": self.detect_phase_force(
                                         self.fyl_buffer,
-                                        self.fzl_buffer,
+                                        self.fzl_buffer, self.fzr_buffer,
                                         2),
                                 }
                                 self.manage_stimulation(info_feet)
@@ -93,13 +93,13 @@ class DataReceiver(QObject):
                 if to_sleep > 0:
                     time.sleep(to_sleep)
 
-    def detect_phase_force(self, data_force_ap, data_force_v, foot_num):
+    def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num):
         info = "nothing"
         subject_mass = 500
         fs_camera = 100
         fs_pf = 1000
         ratio = int(fs_pf / fs_camera)
-        lastsecond_force_vert =np.array(list(data_force_v)[-60:])
+        lastsecond_force_vert =np.array(list(data_force_opp)[-30:])
 
         force_ap_last = data_force_ap[-1]
         force_ap_previous = data_force_ap[-2]
@@ -107,7 +107,7 @@ class DataReceiver(QObject):
 
         current_time = datetime.now().timestamp()
 
-        if force_vert_last > 0.7 * subject_mass and  any(lastsecond_force_vert < 50):
+        if force_vert_last > 0.7 * subject_mass and  any(lastsecond_force_vert > 50):
             if (force_ap_last < 0.1 * subject_mass
                     and force_ap_previous > force_ap_last
                     and not self.sendStim[foot_num]
@@ -118,7 +118,11 @@ class DataReceiver(QObject):
                 self.sendStim[foot_num] = True
                 self.last_foot_stim = foot_num
 
-        if (force_vert_last < 0.05 * subject_mass or all(lastsecond_force_vert>50)) and self.sendStim[foot_num]:
+        if ((force_vert_last < 0.05 * subject_mass
+            or (force_ap_previous < force_ap_last
+                and force_ap_last> -0.01 * subject_mass)
+        )
+                and self.sendStim[foot_num]):
             info = "StopStim"
             self.event_log.append((current_time, f"ToeOff_{foot_num}"))
             self.sendStim[foot_num] = False
