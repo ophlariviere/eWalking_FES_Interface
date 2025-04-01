@@ -20,7 +20,7 @@ from pysciencemode import RehastimP24 as St
 
 
 # Configurer le logging
-logging.basicConfig(level=logging.INFO, format="%(asc_time)s - %(level_name)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class StimInterfaceWidget(QWidget):
@@ -73,14 +73,14 @@ class StimInterfaceWidget(QWidget):
         model_selection = QPushButton("Choisir un fichier", self)
         model_selection.clicked.connect(self.open_filename_dialog)
 
-        process_dyn=QCheckBox('Process IK and ID')
-        process_dyn.setChecked(False)
-        process_dyn.stateChanged.connect(lambda state: self.info_dyn(process_dyn))
+        self.process_dyn=QCheckBox('Process IK and ID')
+        self.process_dyn.setChecked(False)
+        self.process_dyn.stateChanged.connect(lambda state: self.info_dyn)
 
 
         general_layout.addWidget(subject_mass)
         general_layout.addWidget(model_selection)
-        general_layout.addWidget(process_dyn)
+        general_layout.addWidget(self.process_dyn)
 
         # Créer un bouton OK et connecter la fonction d'enregistrement
         ok_button = QPushButton("OK")
@@ -114,8 +114,15 @@ class StimInterfaceWidget(QWidget):
             self.model = biorbd.Model(file_name)
 
 
-    def info_dyn(self, checkbox):
-        self.process_id = checkbox.isChecked()
+    def info_dyn(self):
+        if self.process_id.isChecked():
+            if self.model:
+                self.process_id = True
+        else:
+            print('You need to load a bioMod to process IK, ID')
+            self.process_dyn.setChecked(False)
+            self.process_id = False
+
 
 
 
@@ -159,10 +166,10 @@ class StimInterfaceWidget(QWidget):
         stop_button = QPushButton("Arrêter Stimulateur")
         stop_button.clicked.connect(self.stop_stimulator)
 
-        check_pause_stim = QCheckBox("Stop tying send stim")
-        check_pause_stim.setChecked(True)
-        check_pause_stim.stateChanged.connect(self.pause_fonction_to_send_stim)
-        layout.addWidget(check_pause_stim)
+        self.check_pause_stim = QCheckBox("Stop tying send stim")
+        self.check_pause_stim.setChecked(True)
+        self.check_pause_stim.stateChanged.connect(self.pause_fonction_to_send_stim)
+        layout.addWidget(self.check_pause_stim)
         layout.addWidget(activate_button)
         layout.addWidget(start_button)
         layout.addWidget(update_button)
@@ -170,7 +177,7 @@ class StimInterfaceWidget(QWidget):
         return layout
 
     def pause_fonction_to_send_stim(self):
-        self.dolookneedsendstim = not self.checkpauseStim.isChecked()
+        self.dolookneedsendstim = not self.check_pause_stim.isChecked()
 
     def update_channel_inputs(self):
         """Met à jour les entrées des canaux sélectionnés sous les cases à cocher."""

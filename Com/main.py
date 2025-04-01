@@ -7,7 +7,7 @@ from PyQt5.QtCore import QThread
 
 
 # Configure le logging
-logging.basicConfig(level=logging.DEBUG, format="%(asc_time)s - %(level_name)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def main():

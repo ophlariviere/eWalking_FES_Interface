@@ -109,7 +109,7 @@ class DataReceiver(QObject):
             self.marker_data_cycle = {}
             data_force_to_pro = self.force_data_cycle
             self.force_data_cycle = []
-            self.cycle_processor.calculate_kinematic_dynamic(data_force_to_pro, data_mks_to_pro)
+            self.cycle_processor.calculate_kinematic_dynamic(self.visualization_widget.model, data_force_to_pro, data_mks_to_pro)
 
 
         else:
