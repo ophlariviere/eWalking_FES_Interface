@@ -107,11 +107,11 @@ def organize_force_data(forces_data):
     nb_frames = max(len(forces_data[0][1]), len(forces_data[1][1]))  # Nombre de frames pour cette plaque
     # Collecte des données
     for plate_num in range(nb_pf):
-        PF_Force = forces_data[plate_num][1]
+        pf_force = forces_data[plate_num][1]
         # Temporaire pour cette plaque
         plate_data = np.empty((9, nb_frames))
         plate_data[:] = np.nan
-        for frame_idx, data_tmp in enumerate(PF_Force):
+        for frame_idx, data_tmp in enumerate(pf_force):
             # Récupérer les données et remplir la matrice temporaire
             plate_data[:, frame_idx] = [
                 data_tmp.x,

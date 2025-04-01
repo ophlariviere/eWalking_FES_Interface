@@ -4,15 +4,16 @@ from PyQt5.QtCore import QObject, QTimer
 import logging
 from collections import deque
 import numpy as np
-from scipy.signal import butter, filtfilt
 import pyqtgraph as pg
 from datetime import datetime
+from RealTime_GaitProcess.IK_ID_Process import DataProcessor
 
 
 class DataReceiver(QObject):
     def __init__(self, server_ip, server_port, visualization_widget, read_frequency=100):
         super().__init__()
         self.visualization_widget = visualization_widget
+        self.cycle_processor = DataProcessor
         self.server_ip = server_ip
         self.server_port = server_port
         self.read_frequency = read_frequency
@@ -37,7 +38,7 @@ class DataReceiver(QObject):
         self.force_plot_left = pg.PlotWidget(title="Left AP Force")
         self.plot_curve_fyl = self.force_plot_left.plot(pen='r')
 
-        # Ajout des plots à la GUI
+        # Ajout des plots au GUI
         self.visualization_widget.layout().addWidget(self.force_plot_right)
         self.visualization_widget.layout().addWidget(self.force_plot_left)
 
@@ -48,12 +49,14 @@ class DataReceiver(QObject):
         # Timer pour mise à jour régulière
         self.plot_timer = QTimer()
         self.plot_timer.timeout.connect(self.update_plot)
-        self.plot_timer.start(100)
+        self.plot_timer.start(10)
         self.period = 0.01
+
+        self.marker_data_cycle = {}
+        self.force_data_cycle = []
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
-        # force_data_buffer = [deque(maxlen=30) for _ in range(18)]
 
         while True:
             start_time = time.perf_counter()
@@ -63,16 +66,16 @@ class DataReceiver(QObject):
                         received_data = self.tcp_client.get_data_from_server(command=["force"])
 
                         if received_data["force"]:
-                            force_data_oneframe = received_data["force"]
-                            if force_data_oneframe[0].size > 0:
+                            force_data_one_frame = received_data["force"]
+                            if force_data_one_frame[0].size > 0:
                                 timestamp = datetime.now().timestamp()
                                 self.time_buffer.append(timestamp)
-                                self.fyl_buffer.append(np.mean(force_data_oneframe[1]))
-                                self.fzl_buffer.append(np.mean(force_data_oneframe[2]))
-                                self.fyr_buffer.append(np.mean(force_data_oneframe[10]))
-                                self.fzr_buffer.append(np.mean(force_data_oneframe[11]))
+                                self.fyl_buffer.append(np.mean(force_data_one_frame[1]))
+                                self.fzl_buffer.append(np.mean(force_data_one_frame[2]))
+                                self.fyr_buffer.append(np.mean(force_data_one_frame[10]))
+                                self.fzr_buffer.append(np.mean(force_data_one_frame[11]))
 
-                            if len(self.fyr_buffer) > 40:
+                            if len(self.fyr_buffer) > 30:
                                 info_feet = {
                                     "right": self.detect_phase_force(
                                         self.fyr_buffer,
@@ -85,6 +88,11 @@ class DataReceiver(QObject):
                                 }
                                 self.manage_stimulation(info_feet)
 
+                            if received_data["mks"] and self.visualization_widget.process_id:
+                                self.check_cycle(self.fzr_buffer, received_data)
+                                
+                               
+
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
 
@@ -93,13 +101,29 @@ class DataReceiver(QObject):
                 if to_sleep > 0:
                     time.sleep(to_sleep)
 
+    def check_cycle(self, data_force_v, received_data):
+        force_v_last = data_force_v[-1]
+        force_v_previous = data_force_v[-2]
+        if force_v_last > 0.1 * self.visualization_widget.subject_mass and force_v_previous < force_v_last:
+            data_mks_to_pro = self.marker_data_cycle
+            self.marker_data_cycle = {}
+            data_force_to_pro = self.force_data_cycle
+            self.force_data_cycle = []
+            self.cycle_processor.calculate_kinematic_dynamic(data_force_to_pro, data_mks_to_pro)
+
+
+        else:
+            mks = received_data['mks']
+            for name, pos in mks.items():
+                if name not in self.marker_data:
+                    self.marker_data_cycle[name] = []
+                self.marker_data_cycle[name].append(pos)
+            self.force_data_cycle.append(received_data['force'])
+
+
     def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num):
         info = "nothing"
-        subject_mass = 500
-        fs_camera = 100
-        fs_pf = 1000
-        ratio = int(fs_pf / fs_camera)
-        lastsecond_force_vert =np.array(list(data_force_opp)[-30:])
+        last_second_force_vert = np.array(list(data_force_opp)[-30:])
 
         force_ap_last = data_force_ap[-1]
         force_ap_previous = data_force_ap[-2]
@@ -107,8 +131,8 @@ class DataReceiver(QObject):
 
         current_time = datetime.now().timestamp()
 
-        if force_vert_last > 0.7 * subject_mass and  any(lastsecond_force_vert > 50):
-            if (force_ap_last < 0.1 * subject_mass
+        if force_vert_last > 0.7 * self.visualization_widget.subject_mass and  any(last_second_force_vert > 50):
+            if (force_ap_last < 0.1 * self.visualization_widget.subject_mass
                     and force_ap_previous > force_ap_last
                     and not self.sendStim[foot_num]
                     and self.last_foot_stim is not foot_num):
@@ -118,9 +142,9 @@ class DataReceiver(QObject):
                 self.sendStim[foot_num] = True
                 self.last_foot_stim = foot_num
 
-        if ((force_vert_last < 0.05 * subject_mass
+        if ((force_vert_last < 0.05 * self.visualization_widget.subject_mass
             or (force_ap_previous < force_ap_last
-                and force_ap_last> -0.01 * subject_mass)
+                and force_ap_last> -0.01 * self.visualization_widget.subject_mass)
         )
                 and self.sendStim[foot_num]):
             info = "StopStim"

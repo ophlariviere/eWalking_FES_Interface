@@ -10,17 +10,17 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QComboBox,
     QLabel,
+    QFileDialog
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
 import sys
 import logging
+import biorbd
 from pysciencemode import Device, Modes, Channel
 from pysciencemode import RehastimP24 as St
 
 
 # Configurer le logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asc_time)s - %(level_name)s - %(message)s")
 
 
 class StimInterfaceWidget(QWidget):
@@ -29,6 +29,8 @@ class StimInterfaceWidget(QWidget):
         self.title = "Interface Stimulation"
         self.channel_inputs = {}
         self.dolookneedsendstim = False
+        self.subject_mass = 700
+        self.process_id = False
         self.init_ui()
         self.stimulator = None
         self.stimulator_is_active = False
@@ -36,6 +38,7 @@ class StimInterfaceWidget(QWidget):
         self.stimulator_parameters = {}
         self.foot_emg = {}
         self.num_config = 0
+        self.model = None
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
@@ -44,6 +47,7 @@ class StimInterfaceWidget(QWidget):
 
         # Configuration channel emg
         # layout.addWidget(self.create_emg_num_for_foot())
+        layout.addWidget(self.create_process_and_subject_info())
 
         # Configuration des canaux de stimulation
         layout.addWidget(self.create_channel_config_group())
@@ -53,51 +57,41 @@ class StimInterfaceWidget(QWidget):
 
         self.setLayout(layout)
 
-    def create_emg_num_for_foot(self):
+    def create_process_and_subject_info(self):
         # Créer un QGroupBox pour encapsuler les champs de configuration
-        groupbox = QGroupBox("Configurer les canaux")
+        groupbox = QGroupBox("General information")
 
-        # Créer un layout principal pour les pieds
+        # Créer un layout principal
         main_layout = QVBoxLayout()
 
         # Layout pour les orteils
-        foot_toe_layout = QHBoxLayout()  # Layout horizontal pour les orteils
-        left_toe = QSpinBox()
-        left_toe.setRange(0, 16)
-        left_toe.setPrefix("Left Toe: ")
+        general_layout = QHBoxLayout()  # Layout horizontal pour les orteils
+        subject_mass = QSpinBox()
+        subject_mass.setRange(0, 200)
+        subject_mass.setPrefix("Subject mass: ")
 
-        right_toe = QSpinBox()
-        right_toe.setRange(0, 16)
-        right_toe.setPrefix("Right Toe: ")
+        model_selection = QPushButton("Choisir un fichier", self)
+        model_selection.clicked.connect(self.open_filename_dialog)
 
-        foot_toe_layout.addWidget(left_toe)
-        foot_toe_layout.addWidget(right_toe)
+        process_dyn=QCheckBox('Process IK and ID')
+        process_dyn.setChecked(False)
+        process_dyn.stateChanged.connect(lambda state: self.info_dyn(process_dyn))
 
-        # Layout pour les talons
-        foot_heel_layout = QHBoxLayout()  # Layout horizontal pour les talons
-        left_heel = QSpinBox()
-        left_heel.setRange(0, 16)
-        left_heel.setPrefix("Left Heel: ")
 
-        right_heel = QSpinBox()
-        right_heel.setRange(0, 16)
-        right_heel.setPrefix("Right Heel: ")
-
-        foot_heel_layout.addWidget(left_heel)
-        foot_heel_layout.addWidget(right_heel)
+        general_layout.addWidget(subject_mass)
+        general_layout.addWidget(model_selection)
+        general_layout.addWidget(process_dyn)
 
         # Créer un bouton OK et connecter la fonction d'enregistrement
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(
-            lambda: self.save_emg_values(left_toe.value(), right_toe.value(), left_heel.value(), right_heel.value())
+            lambda: self.save_subject_info(subject_mass.value())
         )
-
         # Ajouter le bouton au layout
         main_layout.addWidget(ok_button)
 
-        # Ajouter les sous-layouts (orteils et talons) au layout principal
-        main_layout.addLayout(foot_toe_layout)
-        main_layout.addLayout(foot_heel_layout)
+        # Ajouter les sous layouts (orteils et talons) au layout principal
+        main_layout.addLayout(general_layout)
 
         # Assigner le layout au QGroupBox
         groupbox.setLayout(main_layout)
@@ -105,14 +99,25 @@ class StimInterfaceWidget(QWidget):
         # Retourner le QGroupBox complet
         return groupbox
 
-    def save_emg_values(self, left_toe_value, right_toe_value, left_heel_value, right_heel_value):
+    def save_subject_info(self,mass_value):
         # Enregistrer les valeurs dans foot_emg
-        self.foot_emg = {
-            "Left Toe": left_toe_value,
-            "Right Toe": right_toe_value,
-            "Left Heel": left_heel_value,
-            "Right Heel": right_heel_value,
-        }
+        self.subject_mass = mass_value * 9.81
+
+    def open_filename_dialog(self):
+        # Ouvre la boîte de dialogue pour sélectionner un fichier
+        options = QFileDialog.Options()
+        file_name, _ = QFileDialog.getOpenFileName(self, "Sélectionner un fichier", "",
+                                                   "Tous les fichiers (*);;Fichiers texte (*.txt)", options=options)
+        if file_name:
+            # Affiche le nom du fichier dans l'étiquette
+            self.label.setText(f"Fichier sélectionné : {file_name}")
+            self.model = biorbd.Model(file_name)
+
+
+    def info_dyn(self, checkbox):
+        self.process_id = checkbox.isChecked()
+
+
 
     """Visu Stim"""
 
@@ -142,30 +147,29 @@ class StimInterfaceWidget(QWidget):
     def create_stimulation_controls(self):
         """Créer les boutons pour contrôler la stimulation."""
         layout = QHBoxLayout()
-        self.activate_button = QPushButton("Activer Stimulateur")
-        self.activate_button.clicked.connect(self.activate_stimulator)
+        activate_button = QPushButton("Activer Stimulateur")
+        activate_button.clicked.connect(self.activate_stimulator)
         # Use lambda to pass arguments correctly to the method
-        self.update_button = QPushButton("Actualiser Paramètre Stim")
-        self.update_button.clicked.connect(self.update_stimulation_parameter)
+        update_button = QPushButton("Actualiser Paramètre Stim")
+        update_button.clicked.connect(self.update_stimulation_parameter)
 
-        self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(lambda: self.call_start_stimulation([1, 2, 3, 4, 5, 6, 7, 8]))
+        start_button = QPushButton("Envoyer Stimulation")
+        start_button.clicked.connect(lambda: self.call_start_stimulation([1, 2, 3, 4, 5, 6, 7, 8]))
 
-        self.stop_button = QPushButton("Arrêter Stimuleur")
-        self.stop_button.clicked.connect(self.stop_stimulator)
+        stop_button = QPushButton("Arrêter Stimulateur")
+        stop_button.clicked.connect(self.stop_stimulator)
 
-        self.checkpauseStim = QCheckBox("Stop tying send stim")
-        self.checkpauseStim.setChecked(True)
-        self.checkpauseStim.stateChanged.connect(self.pausefonctiontosendstim)
-        layout.addWidget(self.checkpauseStim)
-        layout.addWidget(self.activate_button)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.update_button)
-        layout.addWidget(self.stop_button)
+        check_pause_stim = QCheckBox("Stop tying send stim")
+        check_pause_stim.setChecked(True)
+        check_pause_stim.stateChanged.connect(self.pause_fonction_to_send_stim)
+        layout.addWidget(check_pause_stim)
+        layout.addWidget(activate_button)
+        layout.addWidget(start_button)
+        layout.addWidget(update_button)
+        layout.addWidget(stop_button)
         return layout
 
-    def pausefonctiontosendstim(self):
-        # Met à jour self.dolookstimsend selon l'état de la checkbox
+    def pause_fonction_to_send_stim(self):
         self.dolookneedsendstim = not self.checkpauseStim.isChecked()
 
     def update_channel_inputs(self):
@@ -320,3 +324,5 @@ if __name__ == "__main__":
     widget = StimInterfaceWidget()
     widget.show()
     sys.exit(app.exec_())
+
+
