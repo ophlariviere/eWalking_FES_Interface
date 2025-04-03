@@ -67,10 +67,10 @@ class DataReceiver(QObject):
                             if force_data_oneframe[0].size > 0:
                                 timestamp = datetime.now().timestamp()
                                 self.time_buffer.append(timestamp)
-                                self.fyl_buffer.append(np.mean(force_data_oneframe[1]))
-                                self.fzl_buffer.append(np.mean(force_data_oneframe[2]))
-                                self.fyr_buffer.append(np.mean(force_data_oneframe[10]))
-                                self.fzr_buffer.append(np.mean(force_data_oneframe[11]))
+                                self.fyl_buffer.append(np.mean(force_data_oneframe[0][1]))
+                                self.fzl_buffer.append(np.mean(force_data_oneframe[0][2]))
+                                self.fyr_buffer.append(np.mean(force_data_oneframe[1][1]))
+                                self.fzr_buffer.append(np.mean(force_data_oneframe[1][2]))
 
                             if len(self.fyr_buffer) > 40:
                                 info_feet = {
