@@ -23,15 +23,16 @@ class DataReceiver(QObject):
         self.last_channels = []
         self.propulsion_time = None
         self.last_foot_stim = None
+        self.markers_data_cycle = []
         self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
-        self.marker_data_cycle = {}
 
-        self.event_log = deque(maxlen=500)
-        self.fyr_buffer = deque(maxlen=500)
-        self.fyl_buffer = deque(maxlen=500)
-        self.fzr_buffer = deque(maxlen=500)
-        self.fzl_buffer = deque(maxlen=500)
-        self.time_buffer = deque(maxlen=500)
+
+        self.event_log = deque(maxlen=1000)
+        self.fyr_buffer = deque(maxlen=1000)
+        self.fyl_buffer = deque(maxlen=1000)
+        self.fzr_buffer = deque(maxlen=1000)
+        self.fzl_buffer = deque(maxlen=1000)
+        self.time_buffer = deque(maxlen=1000)
 
         # Plots forces antéropostérieures
         self.force_plot_right = pg.PlotWidget(title="Right AP Force")
@@ -56,19 +57,25 @@ class DataReceiver(QObject):
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
-        # force_data_buffer = [deque(maxlen=30) for _ in range(18)]
 
         while True:
             start_time = time.perf_counter()
             for _ in range(3):
                 try:
                     received_data = self.tcp_client.get_data_from_server(command=["force","mks","mks_name"])
-                    if self.visualization_widget.dolookneedsendstim:
-                        if received_data["force"]:
-                            force_data_oneframe = received_data["force"]
-                            self.stimulation_process(force_data_oneframe)
-                    if received_data['mks'] and received_data['force']:
-                        self.check_cycle(self.fzr_buffer, received_data)
+                    if received_data["force"]:
+                        force_data_oneframe = received_data["force"]
+                        timestamp = datetime.now().timestamp()
+                        self.time_buffer.append(timestamp)
+                        self.fyl_buffer.append(np.mean(force_data_oneframe[0][1]))
+                        self.fzl_buffer.append(np.mean(force_data_oneframe[0][2]))
+                        self.fyr_buffer.append(np.mean(force_data_oneframe[1][1]))
+                        self.fzr_buffer.append(np.mean(force_data_oneframe[1][2]))
+                        if self.visualization_widget.dolookneedsendstim:
+                                self.stimulation_process(force_data_oneframe)
+                        if self.visualization_widget.process_idik:
+                            if received_data['mks'][0].any() and received_data['force'][0].any():
+                                    self.check_cycle(self.fzr_buffer, received_data)
 
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
@@ -79,14 +86,6 @@ class DataReceiver(QObject):
                     time.sleep(to_sleep)
 
     def stimulation_process(self, force_data_oneframe):
-        if force_data_oneframe[0].size > 0:
-            timestamp = datetime.now().timestamp()
-            self.time_buffer.append(timestamp)
-            self.fyl_buffer.append(np.mean(force_data_oneframe[0][1]))
-            self.fzl_buffer.append(np.mean(force_data_oneframe[0][2]))
-            self.fyr_buffer.append(np.mean(force_data_oneframe[1][1]))
-            self.fzr_buffer.append(np.mean(force_data_oneframe[1][2]))
-
         if len(self.fyr_buffer) > 40:
             info_feet = {
                 "right": self.detect_phase_force(
@@ -207,25 +206,24 @@ class DataReceiver(QObject):
     def check_cycle(self, data_force_v, received_data):
         force_v_last = data_force_v[-1]
         force_v_previous = data_force_v[-2]
-        if force_v_last > 0.1 * self.visualization_widget.mass and force_v_previous < force_v_last:
-            data_mks_to_pro = np.stack(self.marker_data_cycle, axis=2)
-            self.marker_data_cycle = {}
+        if force_v_last > 0.1 * self.visualization_widget.mass and force_v_previous < force_v_last and self.markers_data_cycle:
+            data_mks_to_pro = np.stack(self.markers_data_cycle, axis=2)
+            #self.markers_data_cycle = []
             data_force_to_pro = self.force_data_cycle
-            self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
-            self.cycle_processor.calculate_kinematic_dynamic(data_force_to_pro, data_mks_to_pro)
+            # self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
+            self.cycle_processor.calculate_kinematic_dynamic(self.visualization_widget.model, data_force_to_pro, data_mks_to_pro)
         else:
             mks = received_data['mks']
             mks_name = received_data['mks_name']
+            self.nb_markers = len(mks_name)
             frame_data = np.full((3, self.nb_markers), np.nan)
             # Remplir les colonnes connues
             for i, name in enumerate(mks_name):
-                if name in self.marker_name_to_index:
-                    idx = self.marker_name_to_index[name]
-                    frame_data[:, idx] = mks[i]  # x, y, z
+                frame_data[:, i] = mks[i]  # x, y, z
             # Ajouter la frame au tableau global
             self.markers_data_cycle.append(frame_data)
 
             for i in range(len(received_data['force'])):  # sur les 2 éléments
-                for i2 in range(received_data['force'].shape[1]):  # sur les 9 composantes
-                    mean_val = np.mean(received_data['force'][i, i2, :])  # moyenne sur les frames
+                for i2 in range(len(received_data['force'][i])):  # sur les 9 composantes
+                    mean_val = float(np.mean(received_data['force'][i][i2, :]))  # moyenne sur les frames
                     self.force_data_cycle[i][i2].append(mean_val)

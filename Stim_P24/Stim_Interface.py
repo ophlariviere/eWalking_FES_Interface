@@ -67,7 +67,7 @@ class StimInterfaceWidget(QWidget):
         mass.setPrefix("Participant mass [kg]:  ")
         ok_mass = QPushButton("OK")
         ok_mass.clicked.connect(
-            lambda: self.update_mass(mass.value)
+            lambda: self.update_mass(mass.value())
         )
         mass_layout.addWidget(mass)
         mass_layout.addWidget(ok_mass)
@@ -107,7 +107,7 @@ class StimInterfaceWidget(QWidget):
             print(f"File selected: {file_name}")
 
     def update_mass(self, mass_value):
-        self.mass = mass_value
+        self.mass = float(mass_value)
 
     def create_emg_num_for_foot(self):
         # Créer un QGroupBox pour encapsuler les champs de configuration

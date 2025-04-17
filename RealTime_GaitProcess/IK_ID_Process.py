@@ -1,4 +1,7 @@
 import biorbd
+from scipy.signal import filtfilt, butter, savgol_filter
+import numpy as np
+
 
 class DataProcessor:
     def __init__(self):
@@ -9,10 +12,13 @@ class DataProcessor:
                         "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
                         "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)}
 
-    def calculate_kinematic_dynamic(self, model, mks):
+    def calculate_kinematic_dynamic(self, model,force, mks):
+        self.calculate_ik(model, mks)
+
+    def calculate_ik(self, model, mks):
         mks = self.fill_missing_markers(mks,5)
         # Marqueurs : (3, n_markers, n_frames)
-
+        freq = 100 #todo adapt auto
         ik = biorbd.InverseKinematics(model, mks)
         ik.solve(method="trf")
         q = ik.q
@@ -23,7 +29,8 @@ class DataProcessor:
         qddot = np.gradient(qdot, axis=1) * freq
         return q_filt, qdot, qddot
 
-    def forcedatafilter(self, data, order, sampling_rate, cutoff_freq):
+    @staticmethod
+    def force_data_filter(data, order, sampling_rate, cutoff_freq):
         nyquist = 0.5 * sampling_rate
         normal_cutoff = cutoff_freq / nyquist
         b, a = butter(order, normal_cutoff, btype='low', analog=False)
@@ -33,7 +40,8 @@ class DataProcessor:
             filtered_data[ii, :] = filtfilt(b, a, data[ii, :], axis=0)
         return filtered_data
 
-    def fill_missing_markers(self, data, max_interp_gap=10):
+    @staticmethod
+    def fill_missing_markers(data, max_interp_gap=10):
         """
         Remplace les NaN dans les données de marqueurs par interpolation ou hold.
         data: np.ndarray de shape (n_markers, 3, n_frames)
