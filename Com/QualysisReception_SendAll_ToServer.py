@@ -15,7 +15,7 @@ class QualisysDataReceiver:
         self.system_rate = system_rate
         self.qualisys_ip = "192.168.254.1"
         self.phase_detection_method = "emg"
-        self.target_rate = 100  # 100 Hz
+        self.target_rate = system_rate  # 100 Hz
         self.target_period = 1 / self.target_rate  # 10 ms
 
     async def setup(self):
@@ -55,12 +55,13 @@ class QualisysDataReceiver:
                     # extract force data
                     data_all["force"] = []
                     _, force_data = packet.get_force()
-                    force_data = organize_force_data(force_data)
-                    data_all["force"] = force_data
+                    forces_array = organize_force_data2(force_data)
+                    data_all["force"] = forces_array
 
                     # extract mks
                     data_all["mks"] = []
-                    _, mks_data = packet.get_3d_markers()
+                    _, mks_data_n = packet.get_3d_markers()
+                    mks_data = np.array([[p.x, p.y, p.z] for p in mks_data_n])
                     data_all["mks"] = mks_data
 
                     # Traite les données analogiques
@@ -129,6 +130,17 @@ def organize_force_data(forces_data):
         # Concaténation des données valides uniquement pour obtenir [9 * nb_pf, nb_frame]
     all_forces_data = np.concatenate(collected_data, axis=0)
     return all_forces_data
+
+def organize_force_data2(force_data):
+    all_data = []
+    for plate, forces in force_data:
+        plate_data = [
+            [f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a]
+            for f in forces
+        ]
+        # Transpose pour avoir (9, nb_frames)
+        all_data.append(np.array(plate_data).T)
+    return np.array(all_data)  # shape = (2, 9, nb_frames)
 
 
 if __name__ == "__main__":

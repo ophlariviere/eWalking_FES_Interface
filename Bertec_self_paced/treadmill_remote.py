@@ -5,6 +5,7 @@ import BertecRemoteControl  # Module de communication avec le tapis
 import interface
 import scipy.linalg
 import zmq
+import nidaqmx
 
 # ✅ Initialisation de la communication avec le tapis
 remote = BertecRemoteControl.RemoteControl()
@@ -77,7 +78,7 @@ class LQGController:
     def __init__(self, min_v=0.4, max_v=2.0):
         self.min_v = min_v
         self.max_v = max_v
-        self.v_tm = min_v
+        self.v_tm = 0
         self.last_command_time = 0
 
     def compute_target_speed(self, flag_step, cop_moyen, dcom_step, fz):
@@ -138,35 +139,52 @@ class TreadmillAIInterface(interface.TreadmillInterface):
     def stop(self):
         self.running = False
         remote.run_treadmill(0, 0.2, 0.2, 0, 0.2, 0.2)
+        # ✅ Mise à jour forcée de l'affichage
+        self.controller.v_tm = 0  # Met la vitesse interne à zéro
+        self.speed_label.setText(f'Vitesse actuelle: 0.00 m/s')
+        # ✅ Arrêter la sortie du DAQ en mettant 0V
+        with nidaqmx.Task() as daq_task:
+            daq_task.ao_channels.add_ao_voltage_chan("Dev1/ao0", min_val=0.0, max_val=5.0)
+            daq_task.write(0.0)  # Envoi de 0V
+            print("🔻 DAQ réinitialisé à 0V.")
 
     def run(self):
-        while self.running:
-            flag_step, cop_moyen, dcom_step, fz = self.estimator.update()
+        # Initialisation de la tâche DAQ en dehors de la boucle pour éviter des re-créations inutiles
+        daq_nom = "Dev1"  # Vérifie le nom du DAQ dans NI MAX
+        canal_ao = "ao0"  # Canal de sortie analogique
 
-            # Récupération des données brutes sans filtrage
-            force_data = remote.get_force_data()
-            if force_data:
-                copx = force_data.get('copx', 0)  # Utilisation directe des données du tapis
-                copy = force_data.get('copy', 0)
+        with nidaqmx.Task() as daq_task:
+            daq_task.ao_channels.add_ao_voltage_chan(f"{daq_nom}/{canal_ao}", min_val=0.0, max_val=5.0)
 
-                # Mise à jour de l'affichage avec les vraies valeurs
-                self.update_cop(copx, copy)
+            while self.running:
+                flag_step, cop_moyen, dcom_step, fz = self.estimator.update()
 
-            # Calcul et mise à jour de la vitesse du tapis
-            v_tm_tgt = self.controller.compute_target_speed(flag_step, cop_moyen, dcom_step, fz)
-            self.controller.update_treadmill_speed(v_tm_tgt)
+                force_data = remote.get_force_data()
+                if force_data:
+                    copx = force_data.get('copx', 0)
+                    copy = force_data.get('copy', 0)
+                    self.update_cop(copx, copy)
 
-            treadmill_acceleration = (v_tm_tgt - self.controller.v_tm) / dt
-            if flag_step:
-                self.step_counter += 1  # Augmente le compteur de pas
+                v_tm_tgt = self.controller.compute_target_speed(flag_step, cop_moyen, dcom_step, fz)
+                self.controller.update_treadmill_speed(v_tm_tgt)
 
-            self.log_data(self.step_counter, self.controller.v_tm, treadmill_acceleration, copy, cop_moyen)
+                treadmill_acceleration = (v_tm_tgt - self.controller.v_tm) / dt
+                if flag_step:
+                    self.step_counter += 1
 
-            self.speed_label.setText(f'Vitesse actuelle: {self.controller.v_tm:.2f} m/s')
-            self.cop_x_label.setText(f"COP X : {copx:.2f} m")
-            self.cop_y_label.setText(f"COP Y : {copy:.2f} m")
+                self.log_data(self.step_counter, self.controller.v_tm, treadmill_acceleration, copy, cop_moyen)
 
-            time.sleep(0.01)
+                self.speed_label.setText(f'Vitesse actuelle: {self.controller.v_tm:.2f} m/s')
+                self.cop_x_label.setText(f"COP X : {copx:.2f} m")
+                self.cop_y_label.setText(f"COP Y : {copy:.2f} m")
+
+                # ✅ Envoi de la vitesse vers le DAQ
+                offset = 0.0025
+                tension = min(max(self.controller.v_tm, 0), 3) # Assure que la tension reste entre 0 et 3V
+                daq_task.write(tension - offset)
+                # print(f"➡️ Envoi de {tension:.2f} V au DAQ (correspondant à {self.controller.v_tm:.2f} m/s)")
+
+                time.sleep(0.1)
 
 
 if __name__ == "__main__":

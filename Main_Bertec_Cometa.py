@@ -2,7 +2,7 @@ import threading
 import asyncio
 import time
 import treadmill_remote
-from Com import QualysisRecpetion_SendTo_Server as qualisys_receiver
+from Com import QualysisReception_SendAll_ToServer as qualisys_receiver
 
 
 def run_treadmill():
