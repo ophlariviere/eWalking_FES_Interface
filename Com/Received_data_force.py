@@ -1,25 +1,19 @@
 import time
 from biosiglive import TcpClient
-from PyQt5.QtCore import QObject
+from PyQt5.QtCore import QObject, QTimer
 import logging
 from collections import deque
 import numpy as np
-from scipy.signal import butter, filtfilt
 import pyqtgraph as pg
-from PyQt5.QtCore import QTimer
 from datetime import datetime
+from RealTime_GaitProcess.IK_ID_Process import DataProcessor
 
 
 class DataReceiver(QObject):
-    def __init__(
-        self,
-        server_ip,
-        server_port,
-        visualization_widget,
-        read_frequency=100,
-    ):
+    def __init__(self, server_ip, server_port, visualization_widget, read_frequency=100):
         super().__init__()
         self.visualization_widget = visualization_widget
+        self.cycle_processor = DataProcessor
         self.server_ip = server_ip
         self.server_port = server_port
         self.read_frequency = read_frequency
@@ -27,104 +21,119 @@ class DataReceiver(QObject):
         logging.basicConfig(level=logging.INFO)
         self.sendStim = {1: False, 2: False}
         self.last_channels = []
+        self.propulsion_time = None
+        self.last_foot_stim = None
+        self.markers_data_cycle = []
+        self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
 
-        # Création des 2 plots (un pour chaque pied)
-        self.plot_widget_right = pg.PlotWidget(title="Right Foot Events")
-        self.plot_curve_right = self.plot_widget_right.plot([], [], pen=None, symbol='o', symbolBrush='b')
+        self.event_log = deque(maxlen=1000)
+        self.fyr_buffer = deque(maxlen=1000)
+        self.fyl_buffer = deque(maxlen=1000)
+        self.fzr_buffer = deque(maxlen=1000)
+        self.fzl_buffer = deque(maxlen=1000)
+        self.time_buffer = deque(maxlen=1000)
 
-        self.plot_widget_left = pg.PlotWidget(title="Left Foot Events")
-        self.plot_curve_left = self.plot_widget_left.plot([], [], pen=None, symbol='o', symbolBrush='r')
+        # Plots forces antéropostérieures
+        self.force_plot_right = pg.PlotWidget(title="Right AP Force")
+        self.plot_curve_fyr = self.force_plot_right.plot(pen='y')
+
+        self.force_plot_left = pg.PlotWidget(title="Left AP Force")
+        self.plot_curve_fyl = self.force_plot_left.plot(pen='r')
 
         # Ajout des plots à la GUI
-        self.visualization_widget.layout().addWidget(self.plot_widget_right)
-        self.visualization_widget.layout().addWidget(self.plot_widget_left)
+        self.visualization_widget.layout().addWidget(self.force_plot_right)
+        self.visualization_widget.layout().addWidget(self.force_plot_left)
+
+        # Lignes d'événements
+        self.event_lines_right = []
+        self.event_lines_left = []
 
         # Timer pour mise à jour régulière
         self.plot_timer = QTimer()
         self.plot_timer.timeout.connect(self.update_plot)
-        self.plot_timer.start(1000)
+        self.plot_timer.start(100)
+        self.period = 0.01
 
     def start_receiving(self):
         logging.info("Début de la réception des données...")
-        buffer = deque(maxlen=100)
+
         while True:
-            for _ in range(3):  # Multiple attempts
+            start_time = time.perf_counter()
+            for _ in range(3):
                 try:
-                    # Attempt to receive data from the server
-                    received_data = self.tcp_client.get_data_from_server(
-                        command=["force"]
-                    )
-
-                    # Stim gestion
-                    if received_data["force"]:  # Ensure we have valid data before proceeding
+                    received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
+                    if received_data["force"]:
                         force_data_oneframe = received_data["force"]
-                        buffer.append(force_data_oneframe)
+                        timestamp = datetime.now().timestamp()
+                        self.time_buffer.append(timestamp)
+                        self.fyl_buffer.append(np.mean(force_data_oneframe[0][1]))
+                        self.fzl_buffer.append(np.mean(force_data_oneframe[0][2]))
+                        self.fyr_buffer.append(np.mean(force_data_oneframe[1][1]))
+                        self.fzr_buffer.append(np.mean(force_data_oneframe[1][2]))
                         if self.visualization_widget.dolookneedsendstim:
-                            force_data = list(zip(*buffer))
-                            info_feet = {
-                                "right": self.detect_phase_force(force_data[1], force_data[2], 1),
-                                "left": self.detect_phase_force(force_data[10], force_data[11], 2),
-                            }
+                                self.stimulation_process(force_data_oneframe)
+                        if self.visualization_widget.process_idik:
+                            if received_data['mks'][0].any() and received_data['force'][0].any():
+                                    self.check_cycle(self.fzr_buffer, received_data)
 
-                            # Gestion de la stimulation en fonction des états détectés
-                            # self.manage_stimulation(info_feet)
-
-                    '''if received_data["mks"] and self.visualization_widget.doprocessIK:
-                        # TODO add cycle cut and process IK
-                        print("todo")'''
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
-                    time.sleep(0.005)  # Optionally wait before retrying
 
-    def detect_phase_force(self, data_force_ap, data_force_v, foot_num):
+                elapsed = time.perf_counter() - start_time
+                to_sleep = self.period - elapsed
+                if to_sleep > 0:
+                    time.sleep(to_sleep)
+
+    def stimulation_process(self, force_data_oneframe):
+        if len(self.fyr_buffer) > 40:
+            info_feet = {
+                "right": self.detect_phase_force(
+                    self.fyr_buffer,
+                    self.fzr_buffer, self.fzl_buffer,
+                    1),
+                "left": self.detect_phase_force(
+                    self.fyl_buffer,
+                    self.fzl_buffer, self.fzr_buffer,
+                    2),
+            }
+            self.manage_stimulation(info_feet)
+
+    def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num):
         info = "nothing"
-        subject_mass = 500
-        fs_camera = 100
-        fs_pf = 1000
-        ratio = fs_pf/fs_camera
-        b, a = butter(2, 10 / (0.5 * fs_pf), btype='low')
-        force_ap_filter = filtfilt(b, a, data_force_ap)  # Antéropostérieure
-        force_vert_filter = filtfilt(b, a, data_force_v)  # Verticale
+        subject_mass = self.visualization_widget.mass * 9.81
+        lastsecond_force_vert = np.array(list(data_force_opp)[-30:])
 
-        # On prend la dernière valeur pour décider (tu peux aussi faire une moyenne glissante)
-        force_ap_last = np.mean(force_ap_filter[-ratio:])  # dernier petit segment
-        force_ap_previous = np.mean(force_ap_filter[-2*ratio:-ratio])
-        force_vert_last = np.mean(force_vert_filter[-ratio:])
+        force_ap_last = data_force_ap[-1]
+        force_ap_previous = data_force_ap[-2]
+        force_vert_last = data_force_v[-1]
 
         current_time = datetime.now().timestamp()
 
-        # Si le pied est en appui (grande force verticale)
-        if force_vert_last > 0.7 * subject_mass:
+        if force_vert_last > 0.7 * subject_mass and any(lastsecond_force_vert > 50):
             if (force_ap_last < 0.1 * subject_mass
                     and force_ap_previous > force_ap_last
-                    and self.sendStim[foot_num] is False):
+                    and not self.sendStim[foot_num]
+                    and self.last_foot_stim is not foot_num):
                 info = "StartStim"
+                print('heel off')
                 self.event_log.append((current_time, f"HeelOff_{foot_num}"))
                 self.sendStim[foot_num] = True
-                """
-                # Calcul de la dérivée (variation de la force antéropostérieure)
-                derive_force_ap = np.diff(force_ap_last)
-    
-                # Détection de changement de signe (inversion de direction)
-                sign_change = np.any(derive_force_ap[:-1] * derive_force_ap[1:] < 0)
-    
-                if sign_change and not self.sendStim[foot_num]:
-                   
-                """
+                self.last_foot_stim = foot_num
 
-        # Si le pied commence à se lever (faible force verticale)
-        if force_vert_last < 0.05 * subject_mass and self.sendStim[foot_num]:
+        if ((force_vert_last < 0.05 * subject_mass
+            or (force_ap_previous < force_ap_last
+                and force_ap_last > -0.01 * subject_mass))
+                and self.sendStim[foot_num]):
             info = "StopStim"
             self.event_log.append((current_time, f"ToeOff_{foot_num}"))
             self.sendStim[foot_num] = False
+            print('toe off')
 
         return info
 
     def manage_stimulation(self, info_feet):
         right = info_feet["right"]
         left = info_feet["left"]
-
-        # Utiliser un set pour éviter les doublons et simplifier les ajouts/suppressions
         active_channels = set(self.last_channels)
 
         if right == "StartStim":
@@ -138,7 +147,6 @@ class DataReceiver(QObject):
 
         new_channels = sorted(active_channels)
 
-        # Si changement de canaux, on agit
         if new_channels != self.last_channels:
             if new_channels:
                 self.visualization_widget.call_start_stimulation(new_channels)
@@ -149,32 +157,72 @@ class DataReceiver(QObject):
             self.last_channels = new_channels
 
     def update_plot(self):
-        if not self.event_log:
+        if not self.event_log or not self.time_buffer:
             return
 
-        times_right, y_right = [], []
-        times_left, y_left = [], []
+        times = np.array(self.time_buffer)
+        self.plot_curve_fyr.setData(times, self.fyr_buffer)
+        self.plot_curve_fyl.setData(times, self.fyl_buffer)
 
-        for t, label in self.event_log:
-            if "1" in label:  # Foot 1 = Right
-                times_right.append(t)
-                y_right.append(1 if "HeelOff" in label else 2)
-            elif "2" in label:  # Foot 2 = Left
-                times_left.append(t)
-                y_left.append(1 if "HeelOff" in label else 2)
-
-        self.plot_curve_right.setData(times_right, y_right)
-        self.plot_widget_right.getPlotItem().getAxis('bottom').setTicks(
-            [[(t, datetime.fromtimestamp(t).strftime("%H:%M:%S")) for t in times_right]]
+        self.force_plot_right.getPlotItem().getAxis('bottom').setTicks(
+            [[(t, datetime.fromtimestamp(t).strftime("%H:%M:%S")) for t in times[::50]]]
         )
-        self.plot_widget_right.getPlotItem().setYRange(0, 3)
-        self.plot_widget_right.getPlotItem().setLabel('left', "Event")
-        self.plot_widget_right.getPlotItem().setLabel('bottom', "Time")
-
-        self.plot_curve_left.setData(times_left, y_left)
-        self.plot_widget_left.getPlotItem().getAxis('bottom').setTicks(
-            [[(t, datetime.fromtimestamp(t).strftime("%H:%M:%S")) for t in times_left]]
+        self.force_plot_left.getPlotItem().getAxis('bottom').setTicks(
+            [[(t, datetime.fromtimestamp(t).strftime("%H:%M:%S")) for t in times[::50]]]
         )
-        self.plot_widget_left.getPlotItem().setYRange(0, 3)
-        self.plot_widget_left.getPlotItem().setLabel('left', "Event")
-        self.plot_widget_left.getPlotItem().setLabel('bottom', "Time")
+
+        self.force_plot_right.getPlotItem().setLabel('left', "Force (N)")
+        self.force_plot_right.getPlotItem().setLabel('bottom', "Time")
+        self.force_plot_left.getPlotItem().setLabel('left', "Force (N)")
+        self.force_plot_left.getPlotItem().setLabel('bottom', "Time")
+
+        # Supprimer anciennes lignes
+        for line in self.event_lines_right:
+            self.force_plot_right.removeItem(line)
+        for line in self.event_lines_left:
+            self.force_plot_left.removeItem(line)
+        self.event_lines_right.clear()
+        self.event_lines_left.clear()
+
+        # Ajouter uniquement les événements visibles
+        for timestamp, event in self.event_log:
+            if "HeelOff_1" in event or "ToeOff_1" in event:
+                if times[0] <= timestamp <= times[-1]:
+                    line = pg.InfiniteLine(pos=timestamp, angle=90, movable=False)
+                    color = 'g' if "HeelOff" in event else 'b'
+                    line.setPen(pg.mkPen(color, width=2))
+                    self.force_plot_right.addItem(line)
+                    self.event_lines_right.append(line)
+
+            elif "HeelOff_2" in event or "ToeOff_2" in event:
+                if times[0] <= timestamp <= times[-1]:
+                    line = pg.InfiniteLine(pos=timestamp, angle=90, movable=False)
+                    color = 'g' if "HeelOff" in event else 'b'
+                    line.setPen(pg.mkPen(color, width=2))
+                    self.force_plot_left.addItem(line)
+                    self.event_lines_left.append(line)
+
+    def check_cycle(self, data_force_v, received_data):
+        force_v_last = data_force_v[-1]
+        force_v_previous = data_force_v[-2]
+        if force_v_last > 0.1 * self.visualization_widget.mass and force_v_previous < force_v_last and self.markers_data_cycle:
+            data_mks_to_pro = np.stack(self.markers_data_cycle, axis=2)
+            #self.markers_data_cycle = []
+            data_force_to_pro = self.force_data_cycle
+            # self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
+            self.cycle_processor.calculate_kinematic_dynamic(self.visualization_widget.model, data_force_to_pro, data_mks_to_pro)
+        else:
+            mks = received_data['mks']
+            mks_name = received_data['mks_name']
+            self.nb_markers = len(mks_name)
+            frame_data = np.full((3, self.nb_markers), np.nan)
+            # Remplir les colonnes connues
+            for i, name in enumerate(mks_name):
+                frame_data[:, i] = mks[i]  # x, y, z
+            # Ajouter la frame au tableau global
+            self.markers_data_cycle.append(frame_data)
+
+            for i in range(len(received_data['force'])):  # sur les 2 éléments
+                for i2 in range(len(received_data['force'][i])):  # sur les 9 composantes
+                    mean_val = float(np.mean(received_data['force'][i][i2, :]))  # moyenne sur les frames
+                    self.force_data_cycle[i][i2].append(mean_val)

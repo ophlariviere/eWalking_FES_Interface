@@ -10,11 +10,11 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QComboBox,
     QLabel,
+    QFileDialog,
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
 import sys
 import logging
+import biorbd
 from pysciencemode import Device, Modes, Channel
 from pysciencemode import RehastimP24 as St
 
@@ -36,6 +36,9 @@ class StimInterfaceWidget(QWidget):
         self.stimulator_parameters = {}
         self.foot_emg = {}
         self.num_config = 0
+        self.model = None
+        self.mass = 70
+        self.process_idik = False
 
     def init_ui(self):
         """Initialisation de l'interface utilisateur."""
@@ -45,6 +48,8 @@ class StimInterfaceWidget(QWidget):
         # Configuration channel emg
         # layout.addWidget(self.create_emg_num_for_foot())
 
+        layout.addWidget(self.create_participant_info())
+
         # Configuration des canaux de stimulation
         layout.addWidget(self.create_channel_config_group())
 
@@ -52,6 +57,57 @@ class StimInterfaceWidget(QWidget):
         layout.addLayout(self.create_stimulation_controls())
 
         self.setLayout(layout)
+
+    def create_participant_info(self):
+        groupbox = QGroupBox("Participant_info")
+        main_sett_layout = QVBoxLayout()
+        mass_layout = QHBoxLayout()
+        mass = QSpinBox()
+        mass.setRange(0, 400)
+        mass.setPrefix("Participant mass [kg]:  ")
+        ok_mass = QPushButton("OK")
+        ok_mass.clicked.connect(
+            lambda: self.update_mass(mass.value())
+        )
+        mass_layout.addWidget(mass)
+        mass_layout.addWidget(ok_mass)
+
+        model_layout = QHBoxLayout()
+        self.model_label = QLabel("No file selected.")
+        model_button = QPushButton("Upload File")
+        model_button.clicked.connect(self.upload_file)
+        model_layout.addWidget(self.model_label)
+        model_layout.addWidget(model_button)
+        model_layout.addWidget(model_button)
+
+        self.checkbox_pro_idik = QCheckBox("Process IK/ID")
+        self.checkbox_pro_idik.setChecked(False)
+        self.checkbox_pro_idik.stateChanged.connect(self.need_process_idik)
+        self.checkbox_pro_idik.setEnabled(False)
+        model_layout.addWidget(self.checkbox_pro_idik)
+
+
+        main_sett_layout.addLayout(mass_layout)
+        main_sett_layout.addLayout(model_layout)
+        groupbox.setLayout(main_sett_layout)
+        return groupbox
+
+    def need_process_idik(self):
+        self.process_idik = True
+        self.checkbox_pro_idik.setChecked(True)
+
+
+    def upload_file(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select a file")
+        if file_name:
+            self.model_label.setText(f"Selected File:\n{file_name}")
+            self.model = biorbd.Model(file_name)
+            self.checkbox_pro_idik.setEnabled(True)
+            # You can now process the file as needed
+            print(f"File selected: {file_name}")
+
+    def update_mass(self, mass_value):
+        self.mass = float(mass_value)
 
     def create_emg_num_for_foot(self):
         # Créer un QGroupBox pour encapsuler les champs de configuration
@@ -120,6 +176,12 @@ class StimInterfaceWidget(QWidget):
         """Créer un groupbox pour configurer les canaux."""
         groupbox = QGroupBox("Configurer les canaux")
         layout = QVBoxLayout()  # Ce layout contiendra les widgets pour les canaux
+
+        # Checkbox pour appliquer à tous les canaux
+        self.copy_to_all_checkbox = QCheckBox("Appliquer à tous les canaux")
+        self.copy_to_all_checkbox.setToolTip("Utilise les réglages du premier canal sélectionné pour tous les autres")
+        self.copy_to_all_checkbox.stateChanged.connect(self.apply_same_settings_to_all_channels)
+        layout.addWidget(self.copy_to_all_checkbox)
 
         # Ajouter les cases à cocher pour sélectionner les canaux
         self.checkboxes = []
@@ -288,6 +350,22 @@ class StimInterfaceWidget(QWidget):
                 logging.warning("None stimulator to stopped.")
         except Exception as e:
             logging.error(f"Error during stopping the stimulator : {e}")
+
+    def apply_same_settings_to_all_channels(self):
+        if not self.copy_to_all_checkbox.isChecked():
+            return
+
+        selected_channels = list(self.channel_inputs.keys())
+        if len(selected_channels) < 2:
+            return  # rien à copier s’il n’y a qu’un seul canal sélectionné
+
+        ref = self.channel_inputs[selected_channels[0]]  # on prend le premier canal comme référence
+        for ch in selected_channels[1:]:
+            self.channel_inputs[ch]["name_input"].setText(ref["name_input"].text())
+            self.channel_inputs[ch]["amplitude_input"].setValue(ref["amplitude_input"].value())
+            self.channel_inputs[ch]["pulse_width_input"].setValue(ref["pulse_width_input"].value())
+            self.channel_inputs[ch]["frequency_input"].setValue(ref["frequency_input"].value())
+            self.channel_inputs[ch]["mode_input"].setCurrentIndex(ref["mode_input"].currentIndex())
 
     def update_stimulation_parameter(self):
         """Met à jour la stimulation."""
