@@ -26,7 +26,6 @@ class DataReceiver(QObject):
         self.markers_data_cycle = []
         self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
 
-
         self.event_log = deque(maxlen=1000)
         self.fyr_buffer = deque(maxlen=1000)
         self.fyl_buffer = deque(maxlen=1000)
@@ -62,7 +61,7 @@ class DataReceiver(QObject):
             start_time = time.perf_counter()
             for _ in range(3):
                 try:
-                    received_data = self.tcp_client.get_data_from_server(command=["force","mks","mks_name"])
+                    received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
                     if received_data["force"]:
                         force_data_oneframe = received_data["force"]
                         timestamp = datetime.now().timestamp()
