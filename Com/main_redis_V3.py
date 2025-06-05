@@ -36,10 +36,9 @@ REDIS_DB = 0
 
 
 class RedisConnectionManager(QThread):
-    """Gère la connexion Redis avec reconnexion automatique"""
     connection_status = pyqtSignal(bool, str)
     redis_connected = False
-    r = None
+    r = None  # Initialisé à None
 
     def __init__(self):
         super().__init__()
@@ -48,29 +47,18 @@ class RedisConnectionManager(QThread):
     def run(self):
         while self.running:
             try:
-                self.r = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
-                self.r.ping()
-                self.redis_connected = True
-                self.connection_status.emit(True, "Connecté au serveur Redis")
-                logging.info("Connecté avec succès au serveur Redis")
-                break
+                self.r = redis.StrictRedis(host='localhost', port=6379, db=0)
+                if self.r.ping():  # Vérifier la connexion
+                    self.redis_connected = True
+                    self.connection_status.emit(True, "Connecté à Redis")
+                    logging.info("Connexion Redis réussie")
+                    break
             except redis.ConnectionError as e:
                 self.redis_connected = False
-                self.connection_status.emit(False, f"Connexion échouée: {str(e)}")
+                self.connection_status.emit(False, f"Échec de connexion: {e}")
                 logging.warning(f"Échec de connexion Redis: {e}")
-                time.sleep(1)
-            except Exception as e:
-                self.redis_connected = False
-                self.connection_status.emit(False, f"Erreur inattendue: {str(e)}")
-                logging.error(f"Erreur Redis inattendue: {e}")
-                time.sleep(1)
+                time.sleep(1)  # Attendre avant de réessayer
 
-    def stop(self):
-        self.running = False
-        self.wait()
-
-    def get_connection(self):
-        return self.r if self.redis_connected else None
 
 
 class DataReceiver(QThread):
@@ -452,7 +440,7 @@ class Interface(QMainWindow):
 
         # Initialisation des threads
         self.redis_manager = RedisConnectionManager()
-        self.data_receiver = DataReceiver("127.0.0.1", 5000)  # Remplacer par l'IP et port réels
+        self.data_receiver = DataReceiver("127.0.0.1", 50000)  # Remplacer par l'IP et port réels
         self.data_processor = DataProcessor()
         self.stim_processor = StimulationProcessor()
 
