@@ -1,8 +1,3 @@
-"""
-Application complète de stimulation avec interface graphique et gestion Redis
-avec exécution parallèle des différents composants
-"""
-
 import sys
 import logging
 from PyQt5.QtWidgets import (
@@ -17,9 +12,10 @@ import numpy as np
 import json
 import biorbd
 from scipy.signal import butter, filtfilt
-from pysciencemode import RehastimP24 as St
-from pysciencemode import Channel, Modes, Device
+from pyScienceMode import RehastimP24 as St
+from pyScienceMode import Channel, Modes, Device
 from biosiglive import TcpClient
+import random
 
 # Configuration du logging
 logging.basicConfig(
@@ -133,6 +129,24 @@ class DataReceiver(QThread):
                             mean_val = float(np.mean(received_data['force'][i][i2, :]))
                             forces_frame[i][i2] = mean_val
 
+                    # Créer un identifiant unique (timestamp + compteur)
+                    frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
+
+                    frame_data = {
+                        "id": frame_id,
+                        "force": forces_frame.tolist(),
+                        "mks": markers_frame.tolist(),
+                        "mks_name": self.mks_name,
+                        "timestamp": time.time()
+                    }
+
+                    safe_redis_operation(redis_client.rpush, "frames", json.dumps(frame_data))
+                    safe_redis_operation(redis_client.ltrim, "frames", -BUFFER_LENGTH, -1)
+
+                    # Stocker l'ID dans une liste séparée pour suivre l'ordre
+                    safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
+                    safe_redis_operation(redis_client.ltrim, "frame_ids", -BUFFER_LENGTH, -1)
+                    """
                     # Stocker les données dans Redis
                     safe_redis_operation(redis_client.lpush, "force", json.dumps(forces_frame.tolist()))
                     safe_redis_operation(redis_client.ltrim, "force", 0, BUFFER_LENGTH - 1)
@@ -140,6 +154,7 @@ class DataReceiver(QThread):
                     safe_redis_operation(redis_client.ltrim, "mks", 0, BUFFER_LENGTH - 1)
                     safe_redis_operation(redis_client.lpush, "mks_name", json.dumps(self.mks_name))
                     safe_redis_operation(redis_client.ltrim, "mks_name", 0, BUFFER_LENGTH - 1)
+                    """
                     self.data_received.emit()
 
                     time.sleep(1/self.read_frequency)
@@ -488,6 +503,7 @@ class StimulationProcessor(QThread):
         self.running = False
         self.stop_stimulator()
         self.wait()
+
 
 class Interface(QMainWindow):
     """Interface principale de l'application"""
