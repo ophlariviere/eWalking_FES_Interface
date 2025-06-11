@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 
 # Constantes globales
-BUFFER_LENGTH = 100
+BUFFER_LENGTH = 2000
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
 REDIS_DB = 0
@@ -107,6 +107,7 @@ class DataReceiver(QThread):
         self.running = False
         self.tcp_client = None
         self.mks_name = None
+        self.frame_counter = 0
 
     def run(self):
         self.running = True
@@ -120,6 +121,8 @@ class DataReceiver(QThread):
                     """ Data markers """
                     if self.mks_name is None:
                         self.mks_name = received_data['mks_name']
+                        safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                        safe_redis_operation(redis_client.ltrim, "mks_name", -BUFFER_LENGTH, -1)
 
                     mks = received_data['mks']
                     nb_markers = len(self.mks_name)
@@ -135,20 +138,19 @@ class DataReceiver(QThread):
                             forces_frame[i][i2] = mean_val
 
                     # Créer un identifiant unique (timestamp + compteur)
-                    frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
+                    # frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
+
+                    frame_id = f"{time.time()}-{self.frame_counter}"
+                    self.frame_counter += 1
 
                     # Stocker l'ID dans une liste séparée pour suivre l'ordre
-                    safe_redis_operation(redis_client.lpush, "frame_ids", frame_id)
+                    safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
                     safe_redis_operation(redis_client.ltrim, "frame_ids", -BUFFER_LENGTH, -1)
 
-                    # Stocker les données dans Redis
-                    safe_redis_operation(redis_client.lpush, "force", json.dumps(forces_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "force", 0, BUFFER_LENGTH - 1)
-                    safe_redis_operation(redis_client.lpush, "mks", json.dumps(markers_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "mks", 0, BUFFER_LENGTH - 1)
-                    safe_redis_operation(redis_client.lpush, "mks_name", json.dumps(self.mks_name))
-                    safe_redis_operation(redis_client.ltrim, "mks_name", 0, BUFFER_LENGTH - 1)
-
+                    safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
+                    safe_redis_operation(redis_client.ltrim, "force",  -BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
+                    safe_redis_operation(redis_client.ltrim, "mks",  -BUFFER_LENGTH, -1)
                     self.data_received.emit()
 
                     time.sleep(1/self.read_frequency)
@@ -203,12 +205,13 @@ class DataProcessor(QThread):
 
             # Filtrer pour ne garder que les nouveaux IDs
             new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
-            new_frame_ids = [frame_id for frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
+            new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in self.processed_frame_ids]
             new_frame_ids = np.array(new_frame_ids)
             new_indices = np.array(new_indices)
             if not new_indices.any():
                 return  # Rien de nouveau à traiter
 
+            print([new_indices[0], new_indices[-1]])
             forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
             forces_all = np.array(forces_all).transpose(1, 2, 0)
             mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
@@ -239,10 +242,10 @@ class DataProcessor(QThread):
 
                 # Stocker les résultats dans Redis
                 if q is not None and tau is not None:
-                    redis_client.lpush("q", json.dumps(q.tolist()))
-                    redis_client.ltrim("q", 0, BUFFER_LENGTH - 1)
-                    redis_client.lpush("tau", json.dumps(tau.tolist()))
-                    redis_client.ltrim("tau", 0, BUFFER_LENGTH - 1)
+                    redis_client.rpush("q", json.dumps(q.tolist()))
+                    redis_client.ltrim("q",  -BUFFER_LENGTH, -1)
+                    redis_client.rpush("tau", json.dumps(tau.tolist()))
+                    redis_client.ltrim("tau",  -BUFFER_LENGTH, -1)
 
         except Exception as e:
             logging.error(f"Erreur lors du traitement des données: {e}")
@@ -254,7 +257,7 @@ class DataProcessor(QThread):
             marker_names = tuple(n.to_string() for n in self.model.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
             markers_in_c3d = np.ndarray((3, len(index_in_c3d), n_frames)) * np.nan
-            mks_to_filter = mks[:3, index_in_c3d[index_in_c3d >= 0], :] / 1000
+            mks_to_filter = mks[:3, index_in_c3d[index_in_c3d >= 0], :]
             # Apply the filter to each coordinate (x, y, z) over time
             smoothed_mks = self.data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=fsMks, order=4)
 
@@ -275,12 +278,8 @@ class DataProcessor(QThread):
         try:
             num_contacts = len(force)
             num_frames = force[0].shape[1]
-            platform_origin = [[0, 0, 0] for _ in range(num_contacts)]
-
-            fs_pf = 2000
+            platform_origin = [[0.78485, 0.7825, 0.], [0.78485, 0.2385, 0.]]
             fs_mks = 100
-            sampling_factor = int(fs_pf / fs_mks)
-
             force_filtered = np.zeros((num_contacts, 3, num_frames))
             moment_filtered = np.zeros((num_contacts, 3, num_frames))
             tau_data = np.zeros((model.nbQ(), num_frames))
@@ -295,11 +294,11 @@ class DataProcessor(QThread):
                     fz = force_filtered[contact_idx, 2, i]
                     if fz > 30:
                         force_vec = force_filtered[contact_idx, :, i]
-                        moment_vec = moment_filtered[contact_idx, :, i]
+                        moment_vec = moment_filtered[contact_idx, :, i]/1000
                         spatial_vector = np.concatenate((moment_vec, force_vec))
                         point_app = platform_origin[contact_idx]
                         segment_name = "LFoot" if contact_idx == 0 else "RFoot"
-                        ext_load.add(biorbd.String(segment_name), spatial_vector, point_app)
+                        ext_load.add(biorbd.String(segment_name), spatial_vector, np.array(point_app))
 
                 tau = model.InverseDynamics(q[:, i], qdot[:, i], qddot[:, i], ext_load)
                 tau_data[:, i] = tau.to_array()
@@ -318,10 +317,10 @@ class DataProcessor(QThread):
         filtered_data = np.empty_like(data)
 
         if data.ndim == 2:  # (3, T)
-            for i in range(3):
+            for i in range(data.shape[0]):
                 filtered_data[i, :] = self.nan_filtfilt(b, a, data[i, :])
         elif data.ndim == 3:  # (3, N, T)
-            for i in range(3):
+            for i in range(data.shape[0]):
                 for j in range(data.shape[1]):
                     filtered_data[i, j, :] = self.nan_filtfilt(b, a, data[i, j, :])
         else:
@@ -679,8 +678,8 @@ class Interface(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(self, "Sélectionner un fichier")
         if file_name:
             try:
-                safe_redis_operation(redis_client.lpush, "model_file_name", file_name)
-                safe_redis_operation(redis_client.ltrim, "model_file_name", 0, BUFFER_LENGTH - 1)
+                safe_redis_operation(redis_client.rpush, "model_file_name", file_name)
+                safe_redis_operation(redis_client.ltrim, "model_file_name",  -BUFFER_LENGTH, -1)
                 logging.info(f"Fichier modèle chargé: {file_name}")
                 self.model_label.setText(file_name.split('/')[-1])
             except Exception as e:
@@ -695,8 +694,8 @@ class Interface(QMainWindow):
             return
 
         try:
-            safe_redis_operation(redis_client.lpush, "participant_mass", str(self.mass))
-            safe_redis_operation(redis_client.ltrim, "participant_mass", 0, BUFFER_LENGTH - 1)
+            safe_redis_operation(redis_client.rpush, "participant_mass", str(self.mass))
+            safe_redis_operation(redis_client.ltrim, "participant_mass",  -BUFFER_LENGTH, -1)
             logging.info(f"Masse mise à jour: {self.mass} kg")
         except Exception as e:
             logging.error(f"Erreur lors de la mise à jour de la masse: {str(e)}")
@@ -851,8 +850,8 @@ class Interface(QMainWindow):
 
         if RedisConnectionManager.r and RedisConnectionManager.redis_connected:
             try:
-                safe_redis_operation(redis_client.lpush, "stimulation_parameters", json.dumps(stimulator_parameters))
-                safe_redis_operation(redis_client.ltrim, "stimulation_parameters", 0, BUFFER_LENGTH - 1)
+                safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
+                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -BUFFER_LENGTH, -1)
                 logging.info("Paramètres de stimulation mis à jour")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
