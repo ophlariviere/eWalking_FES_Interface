@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 
 # Constantes globales
-BUFFER_LENGTH = 2000
+BUFFER_LENGTH = 800
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
 REDIS_DB = 0
@@ -52,6 +52,7 @@ class RedisConnectionManager(QThread):
         while self.running:
             try:
                 redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+                redis_client.flushdb()
                 if redis_client.ping():
                     self.connection_status.emit(True, "Connecté à Redis")
                     logging.info("Connexion Redis réussie")
@@ -78,12 +79,14 @@ class RedisConnectionManager(QThread):
         self.running = False
         self.wait()
 
+
 def is_redis_connected():
     global redis_client
     try:
         return redis_client and redis_client.ping()
     except:
         return False
+
 
 def safe_redis_operation(operation, *args, **kwargs):
     if not is_redis_connected():
@@ -94,6 +97,7 @@ def safe_redis_operation(operation, *args, **kwargs):
     except redis.RedisError as e:
         logging.error(f"Erreur Redis: {str(e)}")
         return None
+
 
 class DataReceiver(QThread):
     """Reçoit les données du serveur TCP et les stocke dans Redis"""
@@ -168,6 +172,7 @@ class DataReceiver(QThread):
             self.tcp_client.close()
         self.wait()
 
+
 class DataProcessor(QThread):
     """Traite les données pour calculer les angles et moments articulaires"""
     processing_complete = pyqtSignal()
@@ -210,43 +215,39 @@ class DataProcessor(QThread):
             new_indices = np.array(new_indices)
             if not new_indices.any():
                 return  # Rien de nouveau à traiter
+            if len(new_frame_ids) > 100:
+                print([new_frame_ids[0], len(new_frame_ids), new_frame_ids[-1]])
+                forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+                forces_all = np.array(forces_all).transpose(1, 2, 0)
+                mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
+                mks_all = np.array(mks_all).transpose(1, 2, 0)
 
-            print([new_indices[0], new_indices[-1]])
-            forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
-            forces_all = np.array(forces_all).transpose(1, 2, 0)
-            mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
-            mks_all = np.array(mks_all).transpose(1, 2, 0)
-            # Récupérer les données pour ces nouveaux IDs
-            mks = np.take(mks_all, new_indices, axis=2)
-            forces = np.take(forces_all, new_indices, axis=2)
-            """
-            forces = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
-            forces = np.array(forces).transpose(1, 2, 0)
-            mks = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
-            mks = np.array(mks).transpose(1, 2, 0)
-            """
-            mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
+                # Récupérer les données pour ces nouveaux IDs
+                mks = np.take(mks_all, new_indices, axis=2)
+                forces = np.take(forces_all, new_indices, axis=2)
 
-            self.processed_frame_ids.extend(new_frame_ids)
+                mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
 
+                self.processed_frame_ids.extend(new_frame_ids)
 
-            file_name = redis_client.lrange("model_file_name", 0, -1)
-            if file_name:
-                file_name2 = file_name[0].decode('utf-8')
-                self.model = biorbd.Model(file_name2)
+                file_name = redis_client.lrange("model_file_name", 0, -1)
+                if file_name:
+                    file_name2 = file_name[0].decode('utf-8')
+                    self.model = biorbd.Model(file_name2)
 
-            if self.model is not None:
-                # Calculer IK/ID
-                q, qdot, qddot = self.calculate_ik(self.model, mks, mks_name[0])
-                tau = self.calculate_id(self.model, forces, q, qdot, qddot)
+                if self.model is not None:
+                    # Calculer IK/ID
+                    q, qdot, qddot = self.calculate_ik(self.model, mks, mks_name[0])
+                    tau = self.calculate_id(self.model, forces, q, qdot, qddot)
 
-                # Stocker les résultats dans Redis
-                if q is not None and tau is not None:
-                    redis_client.rpush("q", json.dumps(q.tolist()))
-                    redis_client.ltrim("q",  -BUFFER_LENGTH, -1)
-                    redis_client.rpush("tau", json.dumps(tau.tolist()))
-                    redis_client.ltrim("tau",  -BUFFER_LENGTH, -1)
+                    # Stocker les résultats dans Redis
+                    if q is not None and tau is not None:
+                        for i in range(tau.shape[1]):
+                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q[:, i].tolist()))
+                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau[:, i].tolist()))
 
+                        safe_redis_operation(redis_client.ltrim, "q", -BUFFER_LENGTH, -1)
+                        safe_redis_operation(redis_client.ltrim, "tau", -BUFFER_LENGTH, -1)
         except Exception as e:
             logging.error(f"Erreur lors du traitement des données: {e}")
 
@@ -339,6 +340,7 @@ class DataProcessor(QThread):
         if len(valid_idx) > 1:
             filtered[valid_idx] = filtfilt(b, a, data[valid_idx])
         return filtered
+
     def stop(self):
         self.running = False
         self.wait()
@@ -356,49 +358,34 @@ class StimulationProcessor(QThread):
         self.sendStim = {1: False, 2: False}
         self.last_foot_stim = None
         self.last_channels = []
-        self.processed_frame_ids = set()
+        self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
 
     def run(self):
         while self.running:
             try:
                 if is_redis_connected():
                     self.stimulation_process()
-                time.sleep(0.1)
+                time.sleep(0.01)
             except Exception as e:
                 logging.error(f"Erreur dans StimulationProcessor: {e}")
-                time.sleep(1)
+                time.sleep(0.01)
 
     def stimulation_process(self):
         try:
-            # Récupérer les données de force depuis Redis
-            # Récupérer les IDs des frames disponibles
-            """
             frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
-
-            # Filtrer pour ne garder que les nouveaux IDs
-            new_frame_ids = [fid for fid in frame_ids if fid not in self.processed_frame_ids]
-
-            if not new_frame_ids:
+            new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
+            new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in self.processed_frame_ids]
+            new_frame_ids = np.array(new_frame_ids)
+            new_indices = np.array(new_indices)
+            new_indices = new_indices[new_indices < BUFFER_LENGTH-1]
+            if not new_indices.any():
                 return  # Rien de nouveau à traiter
 
-            for frame_id in new_frame_ids:
-                # Récupérer les données de la frame
-                frame_data = json.loads(redis_client.hget("frames_data", frame_id).decode('utf-8'))
+            forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+            forces_all = np.array(forces_all).transpose(1, 2, 0)
+            force_data = np.take(forces_all, new_indices, axis=2)
+            self.processed_frame_ids.extend(new_frame_ids)
 
-                # Traiter les données de force...
-                forces = np.array(frame_data['force'])
-
-            """   
-            forces = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
-            force_data = np.array(forces).transpose(1, 2, 0)
-            """
-            self.processed_frame_ids.add(frame_id)
-
-            # Limiter la taille de l'historique
-            if len(self.processed_frame_ids) > BUFFER_LENGTH * 2:
-                self.processed_frame_ids = set(list(self.processed_frame_ids)[-BUFFER_LENGTH:])
-
-            """
             # Récupérer les paramètres de stimulation
             stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
             if stim_params:
@@ -424,12 +411,13 @@ class StimulationProcessor(QThread):
             last_second_force_vert = np.array(list(data_force_opp)[-30:])
 
             force_ap_last = data_force_ap[-1]
-            force_ap_previous = data_force_ap[-2]
+            # force_ap_previous = data_force_ap[-2]
             force_vert_last = data_force_v[-1]
+            deri = data_force_ap[1:]-data_force_ap[0:-1]  # last-previous
 
-            if force_vert_last > 0.7 * subject_mass and any(last_second_force_vert > 50):
+            if force_vert_last > 0.7 * subject_mass and np.any(last_second_force_vert > 50):
                 if (force_ap_last < 0.1 * subject_mass
-                        and force_ap_previous > force_ap_last
+                        and np.any(deri < 0)  # force_ap_previous > force_ap_last
                         and not self.sendStim[foot_num]
                         and self.last_foot_stim is not foot_num):
                     info = "StartStim"
@@ -437,7 +425,7 @@ class StimulationProcessor(QThread):
                     self.last_foot_stim = foot_num
 
             if ((force_vert_last < 0.05 * subject_mass
-                 or (force_ap_previous < force_ap_last
+                 or (np.any(deri.any > 0)  # force_ap_previous < force_ap_last
                      and force_ap_last > -0.01 * subject_mass))
                     and self.sendStim[foot_num]):
                 info = "StopStim"
@@ -573,6 +561,11 @@ class Interface(QMainWindow):
 
         # Initialize UI components
         self.init_ui()
+
+        # Timer pour mettre à jour les graphes toutes les secondes
+        self.graph_update_timer = QTimer(self)
+        self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
+        self.graph_update_timer.start(100)
 
         # Start threads
         self.start_threads()
@@ -855,6 +848,7 @@ class Interface(QMainWindow):
                 logging.info("Paramètres de stimulation mis à jour")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
+
     def update_connection_status(self, connected, message):
         """Met à jour le statut de connexion"""
         self.connection_status.setText(f"Statut: {message}")
@@ -869,11 +863,12 @@ class Interface(QMainWindow):
             else "color: gray;"
         )
 
-    def initialize_data_to_plot(self):
+    @staticmethod
+    def initialize_data_to_plot():
         """Initialise le dictionnaire des données à tracer."""
         keys = [
-            "Force_1", "Force_2",
-            "Tau_LHip", "Tau_LKnee", "Tau_LAnkle",
+            "force_1", "force_2",
+            "tau_LHip", "tau_LKnee", "tau_LAnkle",
             "q_LHip", "q_LKnee", "q_LAnkle",
         ]
         return {key: {} for key in keys}
@@ -893,59 +888,48 @@ class Interface(QMainWindow):
         groupbox.setLayout(layout)
         return groupbox
 
-    def update_data_and_graphs(self, new_data):
-        """
-        Met à jour les données et actualise les graphiques.
-        - new_data: Nouvelles données du cycle actuel (peut être une valeur unitaire ou un vecteur)
-        """
-        """
-        for key in self.DataToPlot:
-            #while len(self.DataToPlot[key]) <= self.stimConfigValue:
-                #self.DataToPlot[key].append([])
-            self.DataToPlot[key].append(self.get_value_iterative(new_data, key))
-        self.DataToPlotConfigNum.append(self.stimConfigValue)
-        """
+    def update_data_and_graphs(self):
         # Parcours des clés de self.DataToPlot
         for key in self.DataToPlot.keys():
-            # Initialiser la configuration de stimulation dans le dictionnaire si elle n'existe pas
-            if self.stimConfigValue not in self.DataToPlot[key]:
-                self.DataToPlot[key][self.stimConfigValue] = []
+            if 'force' in key:
+                data = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+                data = np.array(data).transpose(1, 2, 0)
+                if data is None:
+                    continue
+                if 'force_1' in key:
+                    self.DataToPlot[key] = data[0][2, :]
+                if 'force_2' in key:
+                    self.DataToPlot[key] = data[1][2, :]
+            else:
+                data_l = None
+                if 'tau' in key:
+                    data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
 
-            # Vérifier si la nouvelle donnée contient la clé
-            value = self.get_value_iterative(new_data, key)
+                elif 'q' in key:
+                    data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
 
-            # Vérifier si la valeur est numérique et l'ajouter directement
-            if isinstance(value, (np.ndarray, list)):  # Check for array-like objects
-                value = np.array(value)  # Ensure it's a NumPy array if it's not already
-                if value.ndim == 2:  # Check the number of dimensions
-                    if 'Force' in key or 'Moment' in key:
-                        interpolated_vector = self.interpolate_vector(value[0, :])  # TODO change to select axis
-                        self.DataToPlot[key][self.stimConfigValue].append(interpolated_vector)
-                    else:
-                        interpolated_vector = self.interpolate_vector(value[1, :])
-                        if 'Tau' in key:
-                            self.DataToPlot[key][self.stimConfigValue].append(interpolated_vector / 58)
-                        else:
-                            self.DataToPlot[key][self.stimConfigValue].append(interpolated_vector * 180 / 3.14)
-                else:
-                    self.DataToPlot[key][self.stimConfigValue].append(value)
-            elif isinstance(value, (int, float)):  # Handle scalar numbers separately
-                self.DataToPlot[key][self.stimConfigValue].append(value)
+                if not data_l:
+                    continue
 
+                n_frames = len(data_l)
+                n_dof = len(data_l[0])
+                data = np.zeros((n_dof, n_frames))
+                for frame_i, frame in enumerate(data_l):  # Chaque frame est une liste de 8 valeurs
+                    for dof_i, dof in enumerate(frame):
+                        data[dof_i, frame_i] = dof
+                if data is None:
+                    continue
+
+                if 'q' in key:
+                    data = data * 180 / np.pi
+
+                if 'LHip' in key:
+                    self.DataToPlot[key] = data[37, :]
+                elif 'LAnkle' in key:
+                    self.DataToPlot[key] = data[40, :]
+                elif 'Lknee' in key:
+                    self.DataToPlot[key] = data[43, :]
         self.update_graphs()
-
-    @staticmethod
-    def interpolate_vector(vector):
-        # Vérification que la taille du vecteur est correcte avant d'interpoler
-        if len(vector) == 0:
-            logging.error("Le vecteur d'entrée est vide pour l'interpolation.")
-            return np.zeros(100)  # Retourner un vecteur nul si le vecteur est vide
-
-        x = np.linspace(0, 1, len(vector))
-        x_new = np.linspace(0, 1, 100)
-        function_interpolation = interp1d(x, vector, kind='linear')
-        interpolated_vector = function_interpolation(x_new)
-        return interpolated_vector
 
     def update_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
@@ -970,59 +954,18 @@ class Interface(QMainWindow):
             if is_checked:
                 # Ajouter un sous-graphe pour chaque graphique sélectionné
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
-                data_to_plot = self.DataToPlot[key]
-                if any(len(values) > 0 for values in data_to_plot.values()):
-                    if all(isinstance(values[0], (int, float)) for values in data_to_plot.values() if len(values) > 0):
-                        self.plot_numeric_data(ax, key, key)
-                    else:
-                        self.plot_vector_data(ax, key, key)
-
+                if key in self.DataToPlot.keys():
+                    self.plot_vector_data(ax, key)
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
         self.canvas.draw()
 
-
-    @staticmethod
-    def get_value_iterative(d, key_to_find):
-        """Retourne la valeur associée à une clé dans un dictionnaire imbriqué, en utilisant une approche itérative."""
-        stack = [d]
-        while stack:
-            current_dict = stack.pop()
-            if not isinstance(current_dict, dict):
-                continue
-            if key_to_find in current_dict:
-                return current_dict[key_to_find]
-            for value in current_dict.values():
-                if isinstance(value, dict):
-                    stack.append(value)
-        return None
-
-    def plot_numeric_data(self, ax, key, ylabel):
-        # Tracer les valeurs numériques (par exemple, Cycleduration, Cadence) sur le sous-graphe 'ax'
-        for stim_config, values in self.DataToPlot[key].items():
-            cycles = list(range(1, len(values) + 1))
-            ax.plot(cycles, values, marker='o', label=f'Stim: {stim_config}')
-
-        ax.set_xlabel('Cycle Number')
-        ax.set_ylabel(ylabel)
-        ax.set_title(f'{ylabel} Over Cycles')
-        ax.legend()
-
-    def plot_vector_data(self, ax, key, ylabel):
-        # Tracer les vecteurs interpolés (par exemple, RHip, RAnkle) sur le sous-graphe 'ax'
-        x_percentage = np.linspace(0, 100, 100)
-        for stim_config, cycle_data in self.DataToPlot[key].items():
-            cycle_data = np.array(cycle_data)  # Convert the list of cycles to a NumPy array
-            mean_vector = np.mean(cycle_data, axis=0)
-            std_vector = np.std(cycle_data, axis=0)
-
-            ax.plot(x_percentage, mean_vector, label=f'Stim: {stim_config}')
-            ax.fill_between(x_percentage, mean_vector - std_vector, mean_vector + std_vector, alpha=0.2)
-        ax.set_xlabel('Percentage of Cycle')
-        ax.set_ylabel(ylabel)
-        ax.set_title(f'{ylabel} by Stimulation Configuration')
-        ax.legend()
+    def plot_vector_data(self, ax, key):
+        data = self.DataToPlot[key]
+        ax.plot(data)
+        ax.set_xlabel('Frame')
+        ax.set_ylabel(key)
 
     @staticmethod
     def on_data_received():
@@ -1034,6 +977,7 @@ class Interface(QMainWindow):
         """Gère la fin du traitement des données"""
         logging.debug("Traitement des données terminé")
 
+
 def main():
     """Point d'entrée principal"""
     try:
@@ -1044,6 +988,7 @@ def main():
     except Exception as e:
         logging.critical(f"Erreur fatale: {str(e)}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
