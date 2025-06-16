@@ -1,5 +1,5 @@
 from custom_interface import MyInterface
-from biosiglive import load, RealTimeProcessingMethod, InterfaceType, DeviceType, Server, InverseKinematicsMethods
+from biosiglive import load, DeviceType, Server, InverseKinematicsMethods
 import numpy as np
 import time
 
@@ -77,7 +77,6 @@ class RealTimeDataProcessor:
                 dataforce = self.interface.get_device_data(device_name="Treadmill")
                 dataforce_ok[0] = dataforce[0:9 , :]
                 dataforce_ok[1] = dataforce[9:, :]
-                #Q, _, mark_tmp = self.interface.get_kinematics_from_markers(marker_set_name="markers", get_markers_data=True)
                 mark_tmp, _ = self.interface.get_marker_set_data()
                 marker = np.transpose(mark_tmp,(1,0,2))
                 marker=np.squeeze(marker, axis=-1)
@@ -96,7 +95,6 @@ class RealTimeDataProcessor:
                             "mks": marker,
                             "mks_name": self.mks_name
                         }
-                        #"Angle": Q[:, -1],
                         self.server.send_data(dataAll, connection, message)
         except KeyboardInterrupt:
             print("Arrêt manuel du programme.")

@@ -1,3 +1,8 @@
+"""
+Before starting the code, run in terminal :  docker run --name redis-server -p 6379:6379 -d redis
+"""
+
+
 import sys
 import logging
 from PyQt5.QtWidgets import (
@@ -34,6 +39,9 @@ BUFFER_LENGTH = 800
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
 REDIS_DB = 0
+
+MARKER_FREQUENCY = 100
+FORCE_MIN_THRESHOLD = 0.05
 
 # Instance Redis globale
 redis_client = None
@@ -112,6 +120,7 @@ class DataReceiver(QThread):
         self.tcp_client = None
         self.mks_name = None
         self.frame_counter = 0
+        self.cycle_counter = 0
 
     def run(self):
         self.running = True
@@ -143,7 +152,6 @@ class DataReceiver(QThread):
 
                     # Créer un identifiant unique (timestamp + compteur)
                     # frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
-
                     frame_id = f"{time.time()}-{self.frame_counter}"
                     self.frame_counter += 1
 
@@ -253,14 +261,13 @@ class DataProcessor(QThread):
 
     def calculate_ik(self, model, mks, labels):
         try:
-            fsMks = 100
             n_frames = mks.shape[2]
             marker_names = tuple(n.to_string() for n in self.model.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
             markers_in_c3d = np.ndarray((3, len(index_in_c3d), n_frames)) * np.nan
             mks_to_filter = mks[:3, index_in_c3d[index_in_c3d >= 0], :]
             # Apply the filter to each coordinate (x, y, z) over time
-            smoothed_mks = self.data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=fsMks, order=4)
+            smoothed_mks = self.data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
 
             # Store the result
             markers_in_c3d[:, index_in_c3d >= 0, :] = smoothed_mks
@@ -280,14 +287,13 @@ class DataProcessor(QThread):
             num_contacts = len(force)
             num_frames = force[0].shape[1]
             platform_origin = [[0.78485, 0.7825, 0.], [0.78485, 0.2385, 0.]]
-            fs_mks = 100
             force_filtered = np.zeros((num_contacts, 3, num_frames))
             moment_filtered = np.zeros((num_contacts, 3, num_frames))
             tau_data = np.zeros((model.nbQ(), num_frames))
 
             for contact_idx in range(num_contacts):
-                force_filtered[contact_idx] = self.data_filter(force[contact_idx][0:3], 2, fs_mks, 10)
-                moment_filtered[contact_idx] = self.data_filter(force[contact_idx][3:6], 4, fs_mks, 10)
+                force_filtered[contact_idx] = self.data_filter(force[contact_idx][0:3], 2, MARKER_FREQUENCY, 10)
+                moment_filtered[contact_idx] = self.data_filter(force[contact_idx][3:6], 4, MARKER_FREQUENCY, 10)
 
             for i in range(num_frames):
                 ext_load = model.externalForceSet()
@@ -424,7 +430,7 @@ class StimulationProcessor(QThread):
                     self.sendStim[foot_num] = True
                     self.last_foot_stim = foot_num
 
-            if ((force_vert_last < 0.05 * subject_mass
+            if ((force_vert_last < FORCE_MIN_THRESHOLD * subject_mass
                  or (np.any(deri.any > 0)  # force_ap_previous < force_ap_last
                      and force_ap_last > -0.01 * subject_mass))
                     and self.sendStim[foot_num]):
