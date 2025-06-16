@@ -231,14 +231,16 @@ class DataProcessor:
         for frame in toe_off_idx:
             plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
         plt.savefig("cycle_identification.png")
-        plt.show()
+        # plt.show()
 
-        if heel_strike_idx > 1 or toe_off_idx > 1:
-            raise RuntimeError("There was more than one heel strike in this cycle")
-        if right_foot_on_ground_idx[0] == False and len(heel_strike_idx) > 0:
+        for i_cycle in range(heel_strike_idx.shape[0]):
             self.cycle_counter += 1
-            current_cycle_idx[heel_strike_idx:toe_off_idx] = self.cycle_counter
+            if heel_strike_idx.shape[0] > i_cycle + 1:
+                current_cycle_idx[heel_strike_idx[i_cycle]:heel_strike_idx[i_cycle+1]] = self.cycle_counter
+            else:
+                current_cycle_idx[heel_strike_idx[i_cycle]:] = self.cycle_counter
         print(current_cycle_idx)
+
 
     def process(self):
         try:
@@ -252,7 +254,7 @@ class DataProcessor:
             new_indices = np.array(new_indices)
             if not new_indices.any():
                 return  # Rien de nouveau à traiter
-            if len(new_frame_ids) > 400:
+            if len(new_frame_ids) > 100:
                 print([new_frame_ids[0], len(new_frame_ids), new_frame_ids[-1]])
                 forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
@@ -262,9 +264,9 @@ class DataProcessor:
                 self.identify_cycle_start(forces_all)
 
                 # Récupérer les données pour ces nouveaux IDs
-                print(mks_all.shape)
-                print(forces_all.shape)
-                print(new_indices)
+                # print(mks_all.shape)
+                # print(forces_all.shape)
+                # print(new_indices)
                 mks = np.take(mks_all, new_indices, axis=2)
                 forces = np.take(forces_all, new_indices, axis=2)
 
