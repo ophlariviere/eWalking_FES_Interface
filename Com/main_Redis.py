@@ -253,7 +253,7 @@ class DataProcessor:
                 forces = np.take(forces_all, new_indices, axis=2)
 
                 mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
-                self.identify_cycle_start(forces_all)
+                # self.identify_cycle_start(forces_all)
 
                 self.processed_frame_ids.extend(new_frame_ids)
 
@@ -293,9 +293,9 @@ class DataProcessor:
             ik = biorbd.InverseKinematics(model, markers_in_c3d)
             ik.solve(method="trf")
             q = ik.q
-            q = self.data_filter(q, cutoff_freq=10, sampling_rate=fsMks, order=4)
-            qdot = np.gradient(q, axis=1) * fsMks
-            qddot = np.gradient(qdot, axis=1) * fsMks
+            q = self.data_filter(q, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
+            qdot = np.gradient(q, axis=1) * MARKER_FREQUENCY
+            qddot = np.gradient(qdot, axis=1) * MARKER_FREQUENCY
             return q, qdot, qddot
         except Exception as e:
             logging.error(f"Erreur dans calculate_ik: {e}")
@@ -584,12 +584,6 @@ class Interface(QMainWindow):
         # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
         self.stimulation_processor = StimulationProcessor()
 
-        # --- Thread activation --- #
-        threading.Thread(target=self.redis_manager.run()).start()
-        threading.Thread(target=self.data_receiver.start_receiving()).start()
-        threading.Thread(target=self.data_processor.start_processing()).start()
-        threading.Thread(target=self.stimulation_processor.start_processing()).start()
-
         # Initialize UI components
         self.init_ui()
 
@@ -597,6 +591,12 @@ class Interface(QMainWindow):
         # self.graph_update_timer = QTimer(self)
         # self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
         # self.graph_update_timer.start(100)
+
+        # --- Thread activation --- #
+        threading.Thread(target=self.redis_manager.run, daemon=True).start()
+        threading.Thread(target=self.data_receiver.start_receiving, daemon=True).start()
+        threading.Thread(target=self.data_processor.start_processing, daemon=True).start()
+        threading.Thread(target=self.stimulation_processor.start_processing, daemon=True).start()
 
 
     def closeEvent(self, event):
@@ -796,16 +796,16 @@ class Interface(QMainWindow):
         layout = QHBoxLayout()
 
         self.activate_button = QPushButton("Activer Stimulateur")
-        self.activate_button.clicked.connect(self.stim_processor.activate_stimulator)
+        self.activate_button.clicked.connect(self.stimulation_processor.activate_stimulator)
 
         self.update_button = QPushButton("Actualiser Paramètres")
         self.update_button.clicked.connect(self.update_stimulation_parameter)
 
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(self.stim_processor.call_start_stimulation)
+        self.start_button.clicked.connect(self.stimulation_processor.call_start_stimulation)
 
         self.stop_button = QPushButton("Arrêter Stimulateur")
-        self.stop_button.clicked.connect(self.stim_processor.stop_stimulator)
+        self.stop_button.clicked.connect(self.stimulation_processor.stop_stimulator)
 
         self.checkpauseStim = QCheckBox("Stop tying send stim")
         self.checkpauseStim.setChecked(True)
@@ -999,7 +999,6 @@ def main():
     app = QApplication(sys.argv)
     interface = Interface()
     interface.show()
-    interface.start()  # Start the interface on its own thread
     sys.exit(app.exec_()) #  Start the GUI
 
 
