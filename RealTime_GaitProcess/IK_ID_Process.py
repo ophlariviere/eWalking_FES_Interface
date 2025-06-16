@@ -1,7 +1,7 @@
 import biorbd
 import numpy as np
 from scipy.signal import butter, filtfilt, savgol_filter
-
+from collections import deque
 
 class DataProcessor:
     def __init__(self):
@@ -13,23 +13,36 @@ class DataProcessor:
             "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
             "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
         }
+        self.q = deque(maxlen=1000)
+        self.tau = deque(maxlen=1000)
 
     def calculate_kinematic_dynamic(self, model, force, mks):
-        q_filt, qdot, qddot = self.calculate_ik(model, mks)
-        self.calculate_id(model, force, q_filt, qdot, qddot)
-        self.cycle_num = self.cycle_num + 1
+        mks_y = mks[1, :, :]  # shape = (nb_mks, nb_frames)
+        nan_count_y = np.isnan(mks_y).sum(axis=1)  # shape = (nb_mks,)
+        threshold = 0.5 * mks.shape[2]
+        if all(nan_count_y < threshold):
+            print(mks[0,0,0])
+
+            q_filt = self.calculate_ik(model, mks)
+            self.q.append(q_filt)
+            """
+            tau = self.calculate_id(model, force, q_filt, qdot, qddot)
+            self.tau.append(tau)
+            self.cycle_num = self.cycle_num + 1
+            """
 
     def calculate_ik(self, model, mks):
-        mks = self.fill_missing_markers(mks, 5)
+        # mks = self.fill_missing_markers(mks, 5)
         freq = 100  # TODO: adapt frequency dynamically if needed
         ik = biorbd.InverseKinematics(model, mks)
         ik.solve(method="trf")
         q = ik.q
-
-        q_filt = savgol_filter(q, 31, 3, axis=1)
+        """
+        q_filt = savgol_filter(q, 5, 3, axis=1)
         qdot = np.gradient(q_filt, axis=1) * freq
         qddot = np.gradient(qdot, axis=1) * freq
-        return q_filt, qdot, qddot
+        """
+        return q #_filt, qdot, qddot
 
     def calculate_id(self, model, force, q, qdot, qddot, platform_origin=None):
         num_contacts = len(force)
@@ -70,11 +83,11 @@ class DataProcessor:
     @staticmethod
     def fill_missing_markers(data, max_interp_gap=10):
         filled = data.copy()
-        n_markers, _, n_frames = data.shape
+        _, n_markers, n_frames = data.shape
 
         for m in range(n_markers):
             for d in range(3):
-                signal = filled[m, d, :]
+                signal = filled[d, m, :]
                 nans = np.isnan(signal)
                 if not np.any(nans):
                     continue

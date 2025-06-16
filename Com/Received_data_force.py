@@ -7,13 +7,14 @@ import numpy as np
 import pyqtgraph as pg
 from datetime import datetime
 from RealTime_GaitProcess.IK_ID_Process import DataProcessor
+import threading
 
 
 class DataReceiver(QObject):
     def __init__(self, server_ip, server_port, visualization_widget, read_frequency=100):
         super().__init__()
         self.visualization_widget = visualization_widget
-        self.cycle_processor = DataProcessor
+        self.cycle_processor = DataProcessor()
         self.server_ip = server_ip
         self.server_port = server_port
         self.read_frequency = read_frequency
@@ -25,6 +26,7 @@ class DataReceiver(QObject):
         self.last_foot_stim = None
         self.markers_data_cycle = []
         self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
+        self.event_log = []
 
         self.event_log = deque(maxlen=1000)
         self.fyr_buffer = deque(maxlen=1000)
@@ -32,6 +34,7 @@ class DataReceiver(QObject):
         self.fzr_buffer = deque(maxlen=1000)
         self.fzl_buffer = deque(maxlen=1000)
         self.time_buffer = deque(maxlen=1000)
+        self.tau = []
 
         # Plots forces antéropostérieures
         self.force_plot_right = pg.PlotWidget(title="Right AP Force")
@@ -43,6 +46,10 @@ class DataReceiver(QObject):
         # Ajout des plots à la GUI
         self.visualization_widget.layout().addWidget(self.force_plot_right)
         self.visualization_widget.layout().addWidget(self.force_plot_left)
+
+        self.tau_plot = pg.PlotWidget(title="Tau (torques)")
+        self.plot_curve_tau = self.tau_plot.plot(pen='w')
+        self.visualization_widget.layout().addWidget(self.tau_plot)
 
         # Lignes d'événements
         self.event_lines_right = []
@@ -62,7 +69,7 @@ class DataReceiver(QObject):
             for _ in range(3):
                 try:
                     received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
-                    if received_data["force"]:
+                    if len(received_data['force'][0]) > 0:
                         force_data_oneframe = received_data["force"]
                         timestamp = datetime.now().timestamp()
                         self.time_buffer.append(timestamp)
@@ -70,11 +77,28 @@ class DataReceiver(QObject):
                         self.fzl_buffer.append(np.mean(force_data_oneframe[0][2]))
                         self.fyr_buffer.append(np.mean(force_data_oneframe[1][1]))
                         self.fzr_buffer.append(np.mean(force_data_oneframe[1][2]))
+
+                        # ⚡ Appel non bloquant à stimulation_process
                         if self.visualization_widget.dolookneedsendstim:
-                                self.stimulation_process(force_data_oneframe)
+                            threading.Thread(target=self.stimulation_process, args=(force_data_oneframe,),
+                                             daemon=True).start()
+
                         if self.visualization_widget.process_idik:
-                            if received_data['mks'][0].any() and received_data['force'][0].any():
-                                    self.check_cycle(self.fzr_buffer, received_data)
+                            if received_data['mks'] and len(received_data['force'][0]) > 0:
+                                self.add_to_buffer(received_data)
+
+                            force_v_last = self.fzr_buffer[-1]
+                            force_v_previous = self.fzr_buffer[-2]
+
+                            # ⚡ Appel non bloquant à check_cycle
+                            if force_v_last > 0.1 * self.visualization_widget.mass and force_v_previous < force_v_last and self.markers_data_cycle:
+                                threading.Thread(target=self.check_cycle, daemon=True).start()
+                                if len(self.cycle_processor.q)>0:
+                                    self.data = self.cycle_processor.q[:][0,:] # [cycle][dof, frame]
+                                    self.plot_curve_tau.setData(list(self.data))
+                                    self.tau_plot.getPlotItem().setLabel('left', "Torque (Nm)")
+
+
 
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
@@ -83,6 +107,8 @@ class DataReceiver(QObject):
                 to_sleep = self.period - elapsed
                 if to_sleep > 0:
                     time.sleep(to_sleep)
+
+
 
     def stimulation_process(self, force_data_oneframe):
         if len(self.fyr_buffer) > 40:
@@ -202,27 +228,26 @@ class DataReceiver(QObject):
                     self.force_plot_left.addItem(line)
                     self.event_lines_left.append(line)
 
-    def check_cycle(self, data_force_v, received_data):
-        force_v_last = data_force_v[-1]
-        force_v_previous = data_force_v[-2]
-        if force_v_last > 0.1 * self.visualization_widget.mass and force_v_previous < force_v_last and self.markers_data_cycle:
-            data_mks_to_pro = np.stack(self.markers_data_cycle, axis=2)
-            #self.markers_data_cycle = []
-            data_force_to_pro = self.force_data_cycle
-            # self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
-            self.cycle_processor.calculate_kinematic_dynamic(self.visualization_widget.model, data_force_to_pro, data_mks_to_pro)
-        else:
-            mks = received_data['mks']
-            mks_name = received_data['mks_name']
-            self.nb_markers = len(mks_name)
-            frame_data = np.full((3, self.nb_markers), np.nan)
-            # Remplir les colonnes connues
-            for i, name in enumerate(mks_name):
-                frame_data[:, i] = mks[i]  # x, y, z
-            # Ajouter la frame au tableau global
-            self.markers_data_cycle.append(frame_data)
+    def add_to_buffer(self, received_data):
+        mks = received_data['mks']
+        mks_name = received_data['mks_name']
+        self.nb_markers = len(mks_name)
+        frame_data = np.full((3, self.nb_markers), np.nan)
+        # Remplir les colonnes connues
+        for i, name in enumerate(mks_name):
+            frame_data[:, i] = mks[i]  # x, y, z
+        # Ajouter la frame au tableau global
+        self.markers_data_cycle.append(frame_data)
 
-            for i in range(len(received_data['force'])):  # sur les 2 éléments
-                for i2 in range(len(received_data['force'][i])):  # sur les 9 composantes
-                    mean_val = float(np.mean(received_data['force'][i][i2, :]))  # moyenne sur les frames
-                    self.force_data_cycle[i][i2].append(mean_val)
+        for i in range(len(received_data['force'])):  # sur les 2 éléments
+            for i2 in range(len(received_data['force'][i])):  # sur les 9 composantes
+                mean_val = float(np.mean(received_data['force'][i][i2, :]))  # moyenne sur les frames
+                self.force_data_cycle[i][i2].append(mean_val)
+
+    def check_cycle(self):
+            data_mks_to_pro = np.stack(self.markers_data_cycle, axis=2)
+            self.markers_data_cycle = []
+            data_force_to_pro = self.force_data_cycle
+            self.force_data_cycle = [[[] for _ in range(9)] for _ in range(2)]
+            self.cycle_processor.calculate_kinematic_dynamic(model=self.visualization_widget.model, force=data_force_to_pro, mks=data_mks_to_pro)
+
