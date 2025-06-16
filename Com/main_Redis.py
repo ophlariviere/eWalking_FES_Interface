@@ -120,7 +120,6 @@ class DataReceiver:
         self.tcp_client = None
         self.mks_name = None
         self.frame_counter = 0
-        self.cycle_counter = 0
         self.data_received = "Not initialized"
 
     def start_receiving(self):
@@ -166,7 +165,7 @@ class DataReceiver:
                     safe_redis_operation(redis_client.ltrim, "mks",  -BUFFER_LENGTH, -1)
                     self.data_received = "Data received successfully"
 
-                    time.sleep(1/self.read_frequency)
+                    # time.sleep(1/self.read_frequency)
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -198,6 +197,7 @@ class DataProcessor:
         self.model = None
         self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
+        self.cycle_counter = 0
 
     def start_processing(self):
         self.running = True
@@ -207,21 +207,32 @@ class DataProcessor:
                 if is_redis_connected():
                     self.process()
                     self.processing_complete = "Processing complete"
-                time.sleep(0.1)  # Réduire la fréquence de traitement
+                # time.sleep(0.1)  # Réduire la fréquence de traitement
             except Exception as e:
                 logging.error(f"Erreur dans DataProcessor: {e}")
                 time.sleep(1)
 
     def identify_cycle_start(self, forces_all):
         print("Identifying cycle start...")
-        force_filtered = self.data_filter(forces_all[0][0:3], 2, MARKER_FREQUENCY, 10)
+        force_filtered = self.data_filter(forces_all[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
         subject_mass = float(safe_redis_operation(redis_client.lrange, "participant_mass", -1, -1)[0])
         current_cycle_idx = np.ones((forces_all[0].shape[1], )) * self.cycle_counter
 
-        right_foot_on_ground_idx = force_filtered > FORCE_MIN_THRESHOLD * subject_mass
-        right_foot_on_ground_idx = right_foot_on_ground_idx[0]
+        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD*2 * subject_mass
+        right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
         toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
+
+        # Identification : OK
+        plt.figure()
+        plt.plot(force_filtered[2, :])
+        for frame in heel_strike_idx:
+            plt.axvline(x=frame, color='red', linestyle='--', label='Heel Strike')
+        for frame in toe_off_idx:
+            plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
+        plt.savefig("cycle_identification.png")
+        plt.show()
+
         if heel_strike_idx > 1 or toe_off_idx > 1:
             raise RuntimeError("There was more than one heel strike in this cycle")
         if right_foot_on_ground_idx[0] == False and len(heel_strike_idx) > 0:
@@ -232,7 +243,7 @@ class DataProcessor:
     def process(self):
         try:
             # Récupérer les IDs des frames disponibles
-            frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
+            frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -2)]
 
             # Filtrer pour ne garder que les nouveaux IDs
             new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
@@ -248,7 +259,12 @@ class DataProcessor:
                 mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
 
+                self.identify_cycle_start(forces_all)
+
                 # Récupérer les données pour ces nouveaux IDs
+                print(mks_all.shape)
+                print(forces_all.shape)
+                print(new_indices)
                 mks = np.take(mks_all, new_indices, axis=2)
                 forces = np.take(forces_all, new_indices, axis=2)
 
@@ -264,6 +280,7 @@ class DataProcessor:
 
                 if self.model is not None:
                     # Calculer IK/ID
+                    print("Calcul IK/ID...")
                     q, qdot, qddot = self.calculate_ik(self.model, mks, mks_name[0])
                     tau = self.calculate_id(self.model, forces, q, qdot, qddot)
 
@@ -593,10 +610,10 @@ class Interface(QMainWindow):
         # self.graph_update_timer.start(100)
 
         # --- Thread activation --- #
-        threading.Thread(target=self.redis_manager.run, daemon=True).start()
-        threading.Thread(target=self.data_receiver.start_receiving, daemon=True).start()
-        threading.Thread(target=self.data_processor.start_processing, daemon=True).start()
-        threading.Thread(target=self.stimulation_processor.start_processing, daemon=True).start()
+        threading.Thread(target=self.redis_manager.run, daemon=False).start()
+        threading.Thread(target=self.data_receiver.start_receiving, daemon=False).start()
+        threading.Thread(target=self.data_processor.start_processing, daemon=False).start()
+        threading.Thread(target=self.stimulation_processor.start_processing, daemon=False).start()
 
 
     def closeEvent(self, event):
