@@ -25,6 +25,7 @@ import random
 from collections import deque
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+import threading
 
 
 # Configuration du logging
@@ -47,13 +48,13 @@ FORCE_MIN_THRESHOLD = 0.05
 redis_client = None
 
 
-class RedisConnectionManager(QThread):
-    connection_status = pyqtSignal(bool, str)
+class RedisConnectionManager:
 
     def __init__(self):
         super().__init__()
         self.running = True
         global redis_client
+        self.connection_status = "Not initialized"
 
     def run(self):
         global redis_client
@@ -62,13 +63,13 @@ class RedisConnectionManager(QThread):
                 redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
                 redis_client.flushdb()
                 if redis_client.ping():
-                    self.connection_status.emit(True, "Connecté à Redis")
+                    self.connection_status = "Connecté à Redis"
                     logging.info("Connexion Redis réussie")
                     break
                 else:
-                    self.connection_status.emit(False, "Échec de connexion: Redis ne répond pas")
+                    self.connection_status = "Échec de connexion: Redis ne répond pas"
             except redis.ConnectionError as e:
-                self.connection_status.emit(False, f"Échec de connexion: {str(e)}")
+                self.connection_status = f"Échec de connexion: {str(e)}"
                 logging.warning(f"Échec de connexion Redis: {str(e)}")
             time.sleep(1)
 
@@ -76,10 +77,10 @@ class RedisConnectionManager(QThread):
         while self.running:
             try:
                 if redis_client and not redis_client.ping():
-                    self.connection_status.emit(False, "Connexion Redis perdue")
+                    self.connection_status = "Connexion Redis perdue"
                     redis_client = None
             except redis.ConnectionError:
-                self.connection_status.emit(False, "Connexion Redis perdue")
+                self.connection_status = "Connexion Redis perdue"
                 redis_client = None
             time.sleep(5)  # Vérification toutes les 5 secondes
 
@@ -107,9 +108,8 @@ def safe_redis_operation(operation, *args, **kwargs):
         return None
 
 
-class DataReceiver(QThread):
+class DataReceiver:
     """Reçoit les données du serveur TCP et les stocke dans Redis"""
-    data_received = pyqtSignal()
 
     def __init__(self, server_ip, server_port, read_frequency=100):
         super().__init__()
@@ -121,8 +121,9 @@ class DataReceiver(QThread):
         self.mks_name = None
         self.frame_counter = 0
         self.cycle_counter = 0
+        self.data_received = "Not initialized"
 
-    def run(self):
+    def start_receiving(self):
         self.running = True
         try:
             self.tcp_client = TcpClient(self.server_ip, self.server_port, read_frequency=self.read_frequency)
@@ -163,7 +164,7 @@ class DataReceiver(QThread):
                     safe_redis_operation(redis_client.ltrim, "force",  -BUFFER_LENGTH, -1)
                     safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
                     safe_redis_operation(redis_client.ltrim, "mks",  -BUFFER_LENGTH, -1)
-                    self.data_received.emit()
+                    self.data_received = "Data received successfully"
 
                     time.sleep(1/self.read_frequency)
 
@@ -181,9 +182,8 @@ class DataReceiver(QThread):
         self.wait()
 
 
-class DataProcessor(QThread):
+class DataProcessor:
     """Traite les données pour calculer les angles et moments articulaires"""
-    processing_complete = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -197,15 +197,16 @@ class DataProcessor(QThread):
         }
         self.model = None
         self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
+        self.processing_complete = "Not initialized"
 
-    def run(self):
+    def start_processing(self):
         self.running = True
 
         while self.running:
             try:
                 if is_redis_connected():
-                    self.start_processing()
-                    self.processing_complete.emit()
+                    self.process()
+                    self.processing_complete = "Processing complete"
                 time.sleep(0.1)  # Réduire la fréquence de traitement
             except Exception as e:
                 logging.error(f"Erreur dans DataProcessor: {e}")
@@ -228,7 +229,7 @@ class DataProcessor(QThread):
             current_cycle_idx[heel_strike_idx:toe_off_idx] = self.cycle_counter
         print(current_cycle_idx)
 
-    def start_processing(self):
+    def process(self):
         try:
             # Récupérer les IDs des frames disponibles
             frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
@@ -370,8 +371,7 @@ class DataProcessor(QThread):
         self.wait()
 
 
-class StimulationProcessor(QThread):
-    stimulation_status = pyqtSignal(str)
+class StimulationProcessor:
 
     def __init__(self):
         super().__init__()
@@ -383,8 +383,9 @@ class StimulationProcessor(QThread):
         self.last_foot_stim = None
         self.last_channels = []
         self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
+        self.data_received = "Not initialized"
 
-    def run(self):
+    def start_processing(self):
         while self.running:
             try:
                 if is_redis_connected():
@@ -480,10 +481,10 @@ class StimulationProcessor(QThread):
             if new_channels != self.last_channels:
                 if new_channels:
                     self.call_start_stimulation(new_channels, stimulator_parameters)
-                    self.stimulation_status.emit(f"Stim send to canal(s): {new_channels}")
+                    self.stimulation_status = f"Stim send to canal(s): {new_channels}"
                 else:
                     self.call_pause_stimulation()
-                    self.stimulation_status.emit("Stim stop")
+                    self.stimulation_status = "Stim stop"
                 self.last_channels = new_channels
         except Exception as e:
             logging.error(f"Erreur dans manage_stimulation: {e}")
@@ -493,10 +494,10 @@ class StimulationProcessor(QThread):
             if not self.stimulator_is_active:
                 self.stimulator = St(port="COM3", show_log="Status")
                 self.stimulator_is_active = True
-                self.stimulation_status.emit("Stimulateur activé")
+                self.stimulation_status = "Stimulateur activé"
         except Exception as e:
             logging.error(f"Erreur lors de l'activation du stimulateur: {e}")
-            self.stimulation_status.emit(f"Erreur: {str(e)}")
+            self.stimulation_status = f"Erreur: {str(e)}"
 
     def call_start_stimulation(self, channel_to_send, stimulator_parameters):
         try:
@@ -525,17 +526,17 @@ class StimulationProcessor(QThread):
                 self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
                 self.stimulator_is_sending_stim = True
-                self.stimulation_status.emit(f"Stimulation démarrée sur les canaux {channel_to_send}")
+                self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi de la stimulation: {e}")
-            self.stimulation_status.emit(f"Erreur stimulation: {str(e)}")
+            self.stimulation_status = f"Erreur stimulation: {str(e)}"
 
     def call_pause_stimulation(self):
         try:
             if self.stimulator and self.stimulator_is_sending_stim:
                 self.stimulator.end_stimulation()
                 self.stimulator_is_sending_stim = False
-                self.stimulation_status.emit("Stimulation arrêtée")
+                self.stimulation_status = "Stimulation arrêtée"
         except Exception as e:
             logging.error(f"Erreur lors de l'arrêt de la stimulation: {e}")
 
@@ -546,7 +547,7 @@ class StimulationProcessor(QThread):
                 self.stimulator.close_port()
                 self.stimulator_is_active = False
                 self.stimulator = None
-                self.stimulation_status.emit("Stimulateur arrêté")
+                self.stimulation_status = "Stimulateur arrêté"
         except Exception as e:
             logging.error(f"Erreur lors de l'arrêt du stimulateur: {e}")
 
@@ -571,17 +572,23 @@ class Interface(QMainWindow):
         self.model = None
         self.DataToPlot = self.initialize_data_to_plot()
 
-        # Initialize threads
+        # Redis manager
         self.redis_manager = RedisConnectionManager()
-        self.data_receiver = DataReceiver("127.0.0.1", 50000)
-        self.data_processor = DataProcessor()
-        self.stim_processor = StimulationProcessor()
 
-        # Connect signals
-        self.redis_manager.connection_status.connect(self.update_connection_status)
-        self.data_receiver.data_received.connect(self.on_data_received)
-        self.data_processor.processing_complete.connect(self.on_processing_complete)
-        self.stim_processor.stimulation_status.connect(self.update_stimulation_status)
+        # Data receiver (goal: interaction with Qualisys)
+        self.data_receiver = DataReceiver("127.0.0.1", 50000)
+
+        # Data processor (goal: ID, IK)
+        self.data_processor = DataProcessor()
+
+        # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
+        self.stimulation_processor = StimulationProcessor()
+
+        # --- Thread activation --- #
+        threading.Thread(target=self.redis_manager.run()).start()
+        threading.Thread(target=self.data_receiver.start_receiving()).start()
+        threading.Thread(target=self.data_processor.start_processing()).start()
+        threading.Thread(target=self.stimulation_processor.start_processing()).start()
 
         # Initialize UI components
         self.init_ui()
@@ -591,26 +598,9 @@ class Interface(QMainWindow):
         # self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
         # self.graph_update_timer.start(100)
 
-        # Start threads
-        self.start_threads()
-
-    def start_threads(self):
-        """Démarre tous les threads"""
-        self.redis_manager.start()
-        self.data_receiver.start()
-        self.data_processor.start()
-        self.stim_processor.start()
-
-    def stop_threads(self):
-        """Arrête tous les threads"""
-        self.data_receiver.stop()
-        self.data_processor.stop()
-        self.stim_processor.stop()
-        self.redis_manager.stop()
 
     def closeEvent(self, event):
         """Gère la fermeture de l'application"""
-        self.stop_threads()
         event.accept()
 
     def init_ui(self):
@@ -1004,14 +994,13 @@ class Interface(QMainWindow):
 
 def main():
     """Point d'entrée principal"""
-    try:
-        app = QApplication(sys.argv)
-        window = Interface()
-        window.show()
-        sys.exit(app.exec_())
-    except Exception as e:
-        logging.critical(f"Erreur fatale: {str(e)}", exc_info=True)
-        sys.exit(1)
+
+    # GUI (goal: interaction with the user)
+    app = QApplication(sys.argv)
+    interface = Interface()
+    interface.show()
+    interface.start()  # Start the interface on its own thread
+    sys.exit(app.exec_()) #  Start the GUI
 
 
 if __name__ == "__main__":
