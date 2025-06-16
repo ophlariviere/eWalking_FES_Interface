@@ -211,6 +211,23 @@ class DataProcessor(QThread):
                 logging.error(f"Erreur dans DataProcessor: {e}")
                 time.sleep(1)
 
+    def identify_cycle_start(self, forces_all):
+        print("Identifying cycle start...")
+        force_filtered = self.data_filter(forces_all[0][0:3], 2, MARKER_FREQUENCY, 10)
+        subject_mass = float(safe_redis_operation(redis_client.lrange, "participant_mass", -1, -1)[0])
+        current_cycle_idx = np.ones((forces_all[0].shape[1], )) * self.cycle_counter
+
+        right_foot_on_ground_idx = force_filtered > FORCE_MIN_THRESHOLD * subject_mass
+        right_foot_on_ground_idx = right_foot_on_ground_idx[0]
+        heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
+        toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
+        if heel_strike_idx > 1 or toe_off_idx > 1:
+            raise RuntimeError("There was more than one heel strike in this cycle")
+        if right_foot_on_ground_idx[0] == False and len(heel_strike_idx) > 0:
+            self.cycle_counter += 1
+            current_cycle_idx[heel_strike_idx:toe_off_idx] = self.cycle_counter
+        print(current_cycle_idx)
+
     def start_processing(self):
         try:
             # Récupérer les IDs des frames disponibles
@@ -223,7 +240,7 @@ class DataProcessor(QThread):
             new_indices = np.array(new_indices)
             if not new_indices.any():
                 return  # Rien de nouveau à traiter
-            if len(new_frame_ids) > 100:
+            if len(new_frame_ids) > 400:
                 print([new_frame_ids[0], len(new_frame_ids), new_frame_ids[-1]])
                 forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
@@ -235,6 +252,7 @@ class DataProcessor(QThread):
                 forces = np.take(forces_all, new_indices, axis=2)
 
                 mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
+                self.identify_cycle_start(forces_all)
 
                 self.processed_frame_ids.extend(new_frame_ids)
 
@@ -568,10 +586,10 @@ class Interface(QMainWindow):
         # Initialize UI components
         self.init_ui()
 
-        # Timer pour mettre à jour les graphes toutes les secondes
-        self.graph_update_timer = QTimer(self)
-        self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
-        self.graph_update_timer.start(100)
+        # # Timer pour mettre à jour les graphes toutes les secondes
+        # self.graph_update_timer = QTimer(self)
+        # self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
+        # self.graph_update_timer.start(100)
 
         # Start threads
         self.start_threads()
