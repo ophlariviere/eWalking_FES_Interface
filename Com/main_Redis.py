@@ -1,5 +1,10 @@
 """
 Before starting the code, run in terminal :  docker run --name redis-server -p 6379:6379 -d redis
+
+Info:
+The Redis database contains
+1. Data at each frame (force, mks, mks_names, frame_ids)
+2. Data at each cycle (q, tau, cycle_ids)
 """
 
 
@@ -36,10 +41,10 @@ logging.basicConfig(
 )
 
 # Constantes globales
-BUFFER_LENGTH = 800
+FRAME_BUFFER_LENGTH = 800
+CYCLE_BUFFER_LENGTH = 100
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
-REDIS_DB = 0
 
 MARKER_FREQUENCY = 100
 FORCE_MIN_THRESHOLD = 0.05
@@ -50,7 +55,9 @@ START_STIMULATION = False
 STOP_STIMULATOR = False
 
 # Single value shared variables (instead of duplicating the information in the redis database)
-MASS = 70  # Initial value only (will be set by set by Interface.update_mass)
+MASS = 70  # Initial value only (will be set by Interface.update_mass)
+MODEL_FILE_NAME = None  # Will be set by Interface.upload_file
+MODEL = None  # Will be set by Interface.upload_file
 
 # Instance Redis globale
 redis_client = None
@@ -68,7 +75,7 @@ class RedisConnectionManager:
         global redis_client
         while self.running:
             try:
-                redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+                redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=0)
                 redis_client.flushdb()
                 if redis_client.ping():
                     self.connection_status = "Connecté à Redis"
@@ -87,8 +94,9 @@ class RedisConnectionManager:
                 if redis_client and not redis_client.ping():
                     self.connection_status = "Connexion Redis perdue"
                     redis_client = None
-            except redis.ConnectionError:
+            except redis.ConnectionError as e:
                 self.connection_status = "Connexion Redis perdue"
+                logging.warning(f"Échec de connexion Redis: {str(e)}")
                 redis_client = None
             time.sleep(5)  # Vérification toutes les 5 secondes
 
@@ -120,17 +128,20 @@ def get_new_indices(processed_frame_ids, print_option=False):
     """ Filtrer pour ne garder que les nouveaux IDs """
     global redis_client
 
-    frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
-    new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in processed_frame_ids]
-    new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in processed_frame_ids]
-    new_frame_ids = np.array(new_frame_ids)
-    new_indices = np.array(new_indices)
+    try:
+        frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
+        new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in processed_frame_ids]
+        new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in processed_frame_ids]
+        new_frame_ids = np.array(new_frame_ids)
+        new_indices = np.array(new_indices)
 
-    if print_option:
-        if len(processed_frame_ids) > 0:
-            print("processed ", processed_frame_ids[-1])
-        print("frame ids ", frame_ids[0], frame_ids[-1])
-        print("new indices ", new_indices[0], new_indices[-1])
+        if print_option:
+            if len(processed_frame_ids) > 0:
+                print("processed ", processed_frame_ids[-1])
+            print("frame ids ", frame_ids[0], frame_ids[-1])
+            print("new indices ", new_indices[0], new_indices[-1])
+    except:
+        logging.error("erreur lors de lidentification des new indices.")
 
     return new_indices, new_frame_ids, frame_ids
 
@@ -162,7 +173,7 @@ class DataReceiver:
                     if self.mks_name is None:
                         self.mks_name = received_data['mks_name']
                         safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                        safe_redis_operation(redis_client.ltrim, "mks_name", -BUFFER_LENGTH, -1)
+                        safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
 
                     mks = received_data['mks']
                     nb_markers = len(self.mks_name)
@@ -184,12 +195,12 @@ class DataReceiver:
 
                     # Stocker l'ID dans une liste séparée pour suivre l'ordre
                     safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
-                    safe_redis_operation(redis_client.ltrim, "frame_ids", -BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
 
                     safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "force",  -BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.ltrim, "force",  -FRAME_BUFFER_LENGTH, -1)
                     safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "mks",  -BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.ltrim, "mks",  -FRAME_BUFFER_LENGTH, -1)
                     self.data_received = "Data received successfully"
 
                     # time.sleep(1/self.read_frequency)
@@ -221,10 +232,12 @@ class DataProcessor:
             "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
             "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
         }
-        self.model = None
-        self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
+        self.processed_frame_ids = deque(maxlen=2*FRAME_BUFFER_LENGTH)
+        self.processed_cycles = deque(maxlen=2*CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
-        self.cycle_counter = 0
+        self.cycle_counter = 0  # For the detection of cycles
+        self.cycle_idx = 0  # For the treatment of the cycles
+        self.cycle_start_id = None
 
     def start_processing(self):
         self.running = True
@@ -240,14 +253,15 @@ class DataProcessor:
                 time.sleep(1)
 
     def identify_cycle_start(self, forces_all):
-        print("Identifying cycle start...")
+        # print("Identifying cycle start...")
+
         force_filtered = self.data_filter(forces_all[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
         current_cycle_idx = np.ones((forces_all[0].shape[1], )) * self.cycle_counter
 
         right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD*2 * MASS
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
-        toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
+        # toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
 
         # # Identification : OK
         # plt.figure()
@@ -265,11 +279,18 @@ class DataProcessor:
                 current_cycle_idx[heel_strike_idx[i_cycle]:heel_strike_idx[i_cycle+1]] = self.cycle_counter
             else:
                 current_cycle_idx[heel_strike_idx[i_cycle]:] = self.cycle_counter
-        print(current_cycle_idx)
+
+            # # TODO: remove ?
+            # safe_redis_operation(redis_client.rpush, "current_cycle_idx", json.dumps(current_cycle_idx.tolist()))
+            # safe_redis_operation(redis_client.ltrim, "current_cycle_idx", -FRAME_BUFFER_LENGTH, -1)
+
+        return heel_strike_idx
 
 
     def process(self):
         try:
+            global MODEL
+
             new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
             if len(new_frame_ids) > 99:
@@ -278,6 +299,7 @@ class DataProcessor:
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
                 mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
+                mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
 
                 if mks_all.shape[2] != len(all_frame_ids) or forces_all.shape[2] != len(all_frame_ids):
                     # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
@@ -285,41 +307,74 @@ class DataProcessor:
                     # In this case, it is better to wait for the next frame to move forward with the processing.
                     return
 
-                # Récupérer les données pour ces nouveaux IDs
-                mks = mks_all[:, :, new_indices]
                 forces = forces_all[:, :, new_indices]
+                heel_strike_idx = self.identify_cycle_start(forces)
 
-                mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
-                self.identify_cycle_start(forces)
+                if heel_strike_idx.shape[0] > 0:
+                    if self.cycle_start_id is None:
+                        # We skip on purpose everything before the first heel strike is detected
+                        self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
+                        print("initiqlization : start id = ", self.cycle_start_id)
+                        self.processed_frame_ids.extend(new_frame_ids[:heel_strike_idx[0]])
+                    else:
+                        cycle_stop_id = str(new_frame_ids[heel_strike_idx[0]])
 
-                self.processed_frame_ids.extend(new_frame_ids)
+                        # Récupérer les données pour ce cycle uniquement
+                        cycle_start_idx = all_frame_ids.index(self.cycle_start_id)
+                        cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
 
-                file_name = redis_client.lrange("model_file_name", 0, -1)
-                if file_name:
-                    file_name2 = file_name[0].decode('utf-8')
-                    self.model = biorbd.Model(file_name2)
+                        if cycle_stop_idx - cycle_start_idx < 30:
+                            if len(heel_strike_idx) > 1:
+                                cycle_stop_id = str(new_frame_ids[heel_strike_idx[1]])
+                                cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
+                            else:
+                                # logging.info("Cycle trop court, pas de traitement.")
+                                return
 
-                if self.model is not None:
-                    # Calculer IK/ID
-                    print("Calcul IK/ID...")
-                    q, qdot, qddot = self.calculate_ik(self.model, mks, mks_name[0])
-                    tau = self.calculate_id(self.model, forces, q, qdot, qddot)
+                        print("start : ", cycle_start_idx, " / stop : ", cycle_stop_idx)
+                        print("cycle idx : ", self.cycle_idx)
 
-                    # Stocker les résultats dans Redis
-                    if q is not None and tau is not None:
-                        for i in range(tau.shape[1]):
-                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q[:, i].tolist()))
-                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau[:, i].tolist()))
+                        mks = mks_all[:, :, cycle_start_idx:cycle_stop_idx]
+                        forces = forces_all[:, :, cycle_start_idx:cycle_stop_idx]
 
-                        safe_redis_operation(redis_client.ltrim, "q", -BUFFER_LENGTH, -1)
-                        safe_redis_operation(redis_client.ltrim, "tau", -BUFFER_LENGTH, -1)
+                        if MODEL is not None:
+                            print("Calcul IK/ID...")
+
+                            # # Check that all frames have the same markers
+                            # mks_names_this_cycle = mks_name[cycle_start_idx]
+                            # for frame in range(cycle_start_idx, cycle_stop_idx):
+                            #     if mks_name[frame] != mks_names_this_cycle:
+                            #         logging.error("Les noms des marqueurs ne correspondent pas pour tous les frames.")
+                            #         return
+
+                            q, qdot, qddot = self.calculate_ik(MODEL, mks, mks_name)
+                            tau = self.calculate_id(MODEL, forces, q, qdot, qddot)
+
+                            print("q envoyé: ", q.shape)
+
+                            # Stocker les résultats dans Redis
+                            # Stocker l'indice dans une liste séparée pour suivre l'ordre
+                            safe_redis_operation(redis_client.rpush, "cycle_idx", self.cycle_idx)
+                            safe_redis_operation(redis_client.ltrim, "cycle_idx", -CYCLE_BUFFER_LENGTH, -1)
+
+                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "q",  -CYCLE_BUFFER_LENGTH, -1)
+
+                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "tau",  -CYCLE_BUFFER_LENGTH, -1)
+
+                        self.cycle_start_id = cycle_stop_id
+                        self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx: cycle_stop_idx])
+                        self.cycle_idx += 1
+
+
         except Exception as e:
             logging.error(f"Erreur lors du traitement des données: {e}")
 
-    def calculate_ik(self, model, mks, labels):
+    def calculate_ik(self, model: biorbd.Model, mks, labels):
         try:
             n_frames = mks.shape[2]
-            marker_names = tuple(n.to_string() for n in self.model.technicalMarkerNames())
+            marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
             markers_in_c3d = np.ndarray((3, len(index_in_c3d), n_frames)) * np.nan
             mks_to_filter = mks[:3, index_in_c3d[index_in_c3d >= 0], :]
@@ -339,7 +394,7 @@ class DataProcessor:
             logging.error(f"Erreur dans calculate_ik: {e}")
             return None, None, None
 
-    def calculate_id(self, model, force, q, qdot, qddot):
+    def calculate_id(self, model: biorbd.Model, force, q, qdot, qddot):
         try:
             num_contacts = len(force)
             num_frames = force[0].shape[1]
@@ -409,6 +464,68 @@ class DataProcessor:
         self.wait()
 
 
+class BayesianOptimizer:
+    """Traite les données pour determiner quels parametres de stimulation essayer"""
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+        self.dof_corr = {
+            "LHip": (36, 37, 38), "LKnee": (39, 40, 41), "LAnkle": (42, 43, 44),
+            "RHip": (27, 28, 29), "RKnee": (30, 31, 32), "RAnkle": (33, 34, 35),
+            "LShoulder": (18, 19, 20), "LElbow": (21, 22, 23), "LWrist": (24, 25, 26),
+            "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
+            "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
+        }
+        # self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
+        # self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
+        self.processing_complete = "Not initialized"
+        # self.cycle_counter = 0
+        self.current_cycle = None
+
+    def start_optimizing(self):
+        self.running = True
+
+        while self.running:
+            try:
+                if is_redis_connected():
+                    self.process()
+                    self.processing_complete = "Processing complete"
+                # time.sleep(0.1)  # Réduire la fréquence de traitement
+            except Exception as e:
+                logging.error(f"Erreur dans BayesianOptimizer: {e}")
+                time.sleep(1)
+
+    def process(self):
+        try:
+
+            global MODEL
+
+            cycle_indices = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("cycle_idx", 0, -1)]
+            q_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
+
+            if len(q_all) != len(cycle_indices):
+                # We are in a weird state, it is better to wait for the next loop
+                return
+
+            if len(q_all) > 0 and len(cycle_indices) > 0:
+                if self.current_cycle is None:
+                    self.current_cycle = cycle_indices[0]
+                elif self.current_cycle < cycle_indices[-1]:
+                    self.current_cycle += 1
+
+                q = np.array(q_all[cycle_indices.index(self.current_cycle)])
+                print("q recu : ", q.shape)
+
+        except Exception as e:
+            logging.error(f"Erreur lors loptimisation bayesienne: {e}")
+
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
+
 class StimulationProcessor:
 
     def __init__(self):
@@ -420,7 +537,7 @@ class StimulationProcessor:
         self.sendStim = {1: False, 2: False}
         self.last_foot_stim = None
         self.last_channels = []
-        self.processed_frame_ids = deque(maxlen=2*BUFFER_LENGTH)
+        self.processed_frame_ids = deque(maxlen=2*FRAME_BUFFER_LENGTH)
         self.data_received = "Not initialized"
 
     def start_processing(self):
@@ -626,7 +743,6 @@ class Interface(QMainWindow):
         self.num_config = 0
         self.process_idik = False
         self.dolookneedsendstim = False
-        self.model = None
         self.DataToPlot = self.initialize_data_to_plot()
 
         # Initialize UI components
@@ -717,6 +833,8 @@ class Interface(QMainWindow):
 
     def upload_file(self):
         """Charge un fichier de modèle"""
+        global MODEL_FILE_NAME, MODEL
+
         if not is_redis_connected():
             QMessageBox.warning(self, "Erreur", "La connexion Redis n'est pas établie. Veuillez patienter...")
             return
@@ -724,8 +842,8 @@ class Interface(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(self, "Sélectionner un fichier")
         if file_name:
             try:
-                safe_redis_operation(redis_client.rpush, "model_file_name", file_name)
-                safe_redis_operation(redis_client.ltrim, "model_file_name",  -BUFFER_LENGTH, -1)
+                MODEL_FILE_NAME = file_name
+                MODEL = biorbd.Model(file_name)
                 logging.info(f"Fichier modèle chargé: {file_name}")
                 self.model_label.setText(file_name.split('/')[-1])
             except Exception as e:
@@ -910,7 +1028,7 @@ class Interface(QMainWindow):
         if RedisConnectionManager.r and RedisConnectionManager.redis_connected:
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
-                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -BUFFER_LENGTH, -1)
+                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -FRAME_BUFFER_LENGTH, -1)
                 logging.info("Paramètres de stimulation mis à jour")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
@@ -1064,11 +1182,15 @@ def main():
     # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
     stimulation_processor = StimulationProcessor()
 
+    # Bayesian optimizer (goal: determine which stimulation parameters to try)
+    bayesian_optimizer = BayesianOptimizer()
+
     # --- Thread activation --- #
     threading.Thread(target=redis_manager.run, daemon=False).start()
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
     threading.Thread(target=data_processor.start_processing, daemon=False).start()
     threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+    threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
     sys.exit(app.exec_())
