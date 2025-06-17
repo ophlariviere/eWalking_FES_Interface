@@ -116,6 +116,25 @@ def safe_redis_operation(operation, *args, **kwargs):
         return None
 
 
+def get_new_indices(processed_frame_ids, print_option=False):
+    """ Filtrer pour ne garder que les nouveaux IDs """
+    global redis_client
+
+    frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
+    new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in processed_frame_ids]
+    new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in processed_frame_ids]
+    new_frame_ids = np.array(new_frame_ids)
+    new_indices = np.array(new_indices)
+
+    if print_option:
+        if len(processed_frame_ids) > 0:
+            print("processed ", processed_frame_ids[-1])
+        print("frame ids ", frame_ids[0], frame_ids[-1])
+        print("new indices ", new_indices[0], new_indices[-1])
+
+    return new_indices, new_frame_ids, frame_ids
+
+
 class DataReceiver:
     """Reçoit les données du serveur TCP et les stocke dans Redis"""
 
@@ -127,7 +146,7 @@ class DataReceiver:
         self.running = False
         self.tcp_client = None
         self.mks_name = None
-        self.frame_counter = 0
+        self.frame_counter = -1
         self.data_received = "Not initialized"
 
     def start_receiving(self):
@@ -160,8 +179,8 @@ class DataReceiver:
 
                     # Créer un identifiant unique (timestamp + compteur)
                     # frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
-                    frame_id = f"{time.time()}-{self.frame_counter}"
                     self.frame_counter += 1
+                    frame_id = f"{time.time()}-{self.frame_counter}"
 
                     # Stocker l'ID dans une liste séparée pour suivre l'ordre
                     safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
@@ -230,15 +249,15 @@ class DataProcessor:
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
         toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
 
-        # Identification : OK
-        plt.figure()
-        plt.plot(force_filtered[2, :])
-        for frame in heel_strike_idx:
-            plt.axvline(x=frame, color='red', linestyle='--', label='Heel Strike')
-        for frame in toe_off_idx:
-            plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
-        plt.savefig("cycle_identification.png")
-        # plt.show()
+        # # Identification : OK
+        # plt.figure()
+        # plt.plot(force_filtered[2, :])
+        # for frame in heel_strike_idx:
+        #     plt.axvline(x=frame, color='red', linestyle='--', label='Heel Strike')
+        # for frame in toe_off_idx:
+        #     plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
+        # plt.savefig("cycle_identification.png")
+        # # plt.show()
 
         for i_cycle in range(heel_strike_idx.shape[0]):
             self.cycle_counter += 1
@@ -251,34 +270,27 @@ class DataProcessor:
 
     def process(self):
         try:
-            # Récupérer les IDs des frames disponibles
-            frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -2)]
+            new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
-            # Filtrer pour ne garder que les nouveaux IDs
-            new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
-            new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in self.processed_frame_ids]
-            new_frame_ids = np.array(new_frame_ids)
-            new_indices = np.array(new_indices)
-            if not new_indices.any():
-                return  # Rien de nouveau à traiter
-            if len(new_frame_ids) > 100:
+            if len(new_frame_ids) > 99:
                 print([new_frame_ids[0], len(new_frame_ids), new_frame_ids[-1]])
                 forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
                 mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
 
-                self.identify_cycle_start(forces_all)
+                if mks_all.shape[2] != len(all_frame_ids) or forces_all.shape[2] != len(all_frame_ids):
+                    # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
+                    # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
+                    # In this case, it is better to wait for the next frame to move forward with the processing.
+                    return
 
                 # Récupérer les données pour ces nouveaux IDs
-                # print(mks_all.shape)
-                # print(forces_all.shape)
-                # print(new_indices)
-                mks = np.take(mks_all, new_indices, axis=2)
-                forces = np.take(forces_all, new_indices, axis=2)
+                mks = mks_all[:, :, new_indices]
+                forces = forces_all[:, :, new_indices]
 
                 mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
-                # self.identify_cycle_start(forces_all)
+                self.identify_cycle_start(forces)
 
                 self.processed_frame_ids.extend(new_frame_ids)
 
@@ -438,31 +450,37 @@ class StimulationProcessor:
 
     def stimulation_process(self):
         try:
-            frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
-            new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in self.processed_frame_ids]
-            new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in self.processed_frame_ids]
-            new_frame_ids = np.array(new_frame_ids)
-            new_indices = np.array(new_indices)
-            new_indices = new_indices[new_indices < BUFFER_LENGTH-1]
-            if not new_indices.any():
-                return  # Rien de nouveau à traiter
+            new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
-            forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
-            forces_all = np.array(forces_all).transpose(1, 2, 0)
-            force_data = np.take(forces_all, new_indices, axis=2)
-            self.processed_frame_ids.extend(new_frame_ids)
+            if len(new_indices) > 0:
+                forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+                forces_all = np.array(forces_all).transpose(1, 2, 0)
 
-            if len(force_data) > 0:
-                fyr = force_data[0][2]  # Force Y droite
+                if forces_all.shape[2] != len(all_frame_ids):
+                    # logging.info("Les données de forces ne correspondent pas au nombre d'IDs de frame.")
+                    # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
+                    # In this case, it is better to wait for the next frame to move forward with the processing.
+                    return
+
+                force_data = forces_all[:, :, new_indices]
+                self.processed_frame_ids.extend(new_frame_ids)
+
+                # Was like this before:
+                # fyr = force_data[0][2]  # Force Y droite
+                # fzr = force_data[0][5]  # Force Z droite
+                # fyl = force_data[0][8]  # Force Y gauche
+                # fzl = force_data[0][11]  # Force Z gauche
+                fyr = force_data[0][4]  # Force Y droite
                 fzr = force_data[0][5]  # Force Z droite
-                fyl = force_data[0][8]  # Force Y gauche
-                fzl = force_data[0][11]  # Force Z gauche
+                fyl = force_data[1][4]  # Force Y gauche
+                fzl = force_data[1][5]  # Force Z gauche
                 if len(fyr) > 20 and MASS:
                     info_feet = {
                         "right": self.detect_phase_force(fyr, fzr, fzl, 1, MASS),
                         "left": self.detect_phase_force(fyl, fzl, fzr, 2, MASS),
                     }
                     self.manage_stimulation(info_feet)
+
         except Exception as e:
             logging.error(f"Erreur dans stimulation_process: {e}")
 
