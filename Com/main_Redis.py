@@ -9,11 +9,12 @@ The Redis database contains
 
 
 import sys
+from enum import Enum
 import logging
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QCheckBox, QPushButton,
     QWidget, QGroupBox, QLabel, QLineEdit, QSpinBox, QComboBox, QFileDialog,
-    QMessageBox, QStatusBar
+    QMessageBox, QStatusBar, QGridLayout, QRadioButton,
 )
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 import redis
@@ -62,9 +63,21 @@ MASS = 70  # Initial value only (will be set by Interface.update_mass)
 MODEL_FILE_NAME = None  # Will be set by Interface.upload_file
 MODEL = None  # Will be set by Interface.upload_file
 NB_DOF = 45
+DEFAULT_BOUNDS = {
+    "Amplitude": [0, 100],  # Amplitude en mA
+    "Pulse Width": [0, 1000],  # Largeur d'impulsion en microsecondes
+    "Frequency": [0, 200],  # Fréquence en Hz
+}
 
 # Instance Redis globale
 redis_client = None
+
+
+class StimulationMode(Enum):
+    MANUAL = "manual"
+    BAYESIAN = "bayesian"
+    ILC = "ilc"
+
 
 
 class RedisConnectionManager:
@@ -1086,7 +1099,10 @@ class Interface(QMainWindow):
         self.channel_inputs = {}
         self.num_config = 0
         self.process_idik = False
-        self.dolookneedsendstim = False
+        self.do_look_need_send_stim = False
+        self.stimulation_mode = StimulationMode.MANUAL
+        self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in range(1, 9)}
+        self.discomfort = 0
         self.DataToPlot = self.initialize_data_to_plot()
 
         # Initialize UI components
@@ -1123,6 +1139,9 @@ class Interface(QMainWindow):
 
         # Configuration des canaux de stimulation
         main_layout.addWidget(self.create_channel_config_group())
+
+        # Mode de stimulation
+        main_layout.addWidget(self.create_optimization_mode())
 
         # Contrôles de stimulation
         main_layout.addLayout(self.create_stimulation_controls())
@@ -1261,13 +1280,13 @@ class Interface(QMainWindow):
                 name_input = QLineEdit()
                 name_input.setPlaceholderText(f"Nom du canal {channel}")
                 amplitude_input = QSpinBox()
-                amplitude_input.setRange(0, 100)
+                amplitude_input.setRange(DEFAULT_BOUNDS["Amplitude"][0], DEFAULT_BOUNDS["Amplitude"][1])
                 amplitude_input.setSuffix(" mA")
                 pulse_width_input = QSpinBox()
-                pulse_width_input.setRange(0, 1000)
+                pulse_width_input.setRange(DEFAULT_BOUNDS["Pulse Width"][0], DEFAULT_BOUNDS["Pulse Width"][1])
                 pulse_width_input.setSuffix(" µs")
                 frequency_input = QSpinBox()
-                frequency_input.setRange(0, 200)
+                frequency_input.setRange(DEFAULT_BOUNDS["Frequency"][0], DEFAULT_BOUNDS["Frequency"][1])
                 frequency_input.setSuffix(" Hz")
                 mode_input = QComboBox()
                 mode_input.addItems(["SINGLE", "DOUBLET", "TRIPLET"])
@@ -1281,27 +1300,77 @@ class Interface(QMainWindow):
 
                 self.channel_config_layout.addLayout(channel_layout)
 
-                self.channel_inputs[channel] = {
-                    "layout": channel_layout,
-                    "name_input": name_input,
-                    "amplitude_input": amplitude_input,
-                    "pulse_width_input": pulse_width_input,
-                    "frequency_input": frequency_input,
-                    "mode_input": mode_input,
-                }
+                # Enregistrer les widgets pour le canal sélectionné
+                self.set_channel_inputs(
+                    channel,
+                    channel_layout,
+                    name_input,
+                    amplitude_input,
+                    pulse_width_input,
+                    frequency_input,
+                    mode_input,
+                )
 
     @staticmethod
     def activate_stimulator():
         global ACTIVATE_STIMULATOR
         ACTIVATE_STIMULATOR=True
 
-    @staticmethod
-    def start_stimulation():
+    def old_activate_stimulator(self):
+        self.channels = []
+        for channel, inputs in self.channel_inputs.items():
+            channel_obj = Channel(
+                no_channel=channel,
+                name=inputs["name_input"].text(),
+                amplitude=inputs["amplitude_input"].value(),
+                pulse_width=inputs["pulse_width_input"].value(),
+                frequency=inputs["frequency_input"].value(),
+                mode=Modes.SINGLE,  # inputs["mode_input"].currentText(),
+                device_type=Device.Rehastimp24,
+            )
+
+            self.channels.append(channel_obj)
+        if self.channels:
+            self.stimulator.init_stimulation(list_channels=self.channels)
+
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
+
+    def update_stimulation(self):
+        if self.stimulator is not None:
+            self.stimulator.update_stimulation()
+
+    def manual_optim_chosen(self):
+        self.update_button.setEnabled(True)
+        self.start_bayesian_optim_button.setEnabled(False)
+        self.stop_bayesian_optim_button.setEnabled(False)
+        # TODO: Charbie -> add the ICL buttons
+
+    def bayesian_optim_chosen(self):
+        self.update_button.setEnabled(False)
+        self.start_bayesian_optim_button.setEnabled(True)
+        self.stop_bayesian_optim_button.setEnabled(True)
+        # TODO: Charbie -> add the ICL buttons
+
+    def ilc_optim_chosen(self):
+        self.update_button.setEnabled(False)
+        self.start_bayesian_optim_button.setEnabled(False)
+        self.stop_bayesian_optim_button.setEnabled(False)
+        # TODO: Charbie -> add the ICL buttons
+
+
+    def start_stimulation(self):
         global START_STIMULATION
         START_STIMULATION=True
 
-    @staticmethod
-    def stop_stimulator():
+        if self.is_manual_mode:
+            self.update_button.setEnabled(True)
+        elif self.is_bayesian_mode:
+            self.start_bayesian_optim_button.setEnabled(True)
+            self.stop_bayesian_optim_button.setEnabled(True)
+
+
+    def stop_stimulator(self):
         global STOP_STIMULATOR
         STOP_STIMULATOR=True
 
@@ -1323,7 +1392,7 @@ class Interface(QMainWindow):
 
         self.checkpauseStim = QCheckBox("Stop tying send stim")
         self.checkpauseStim.setChecked(True)
-        self.checkpauseStim.stateChanged.connect(self.pausefonctiontosendstim)
+        self.checkpauseStim.stateChanged.connect(self.pause_fonction_to_send_stim)
 
         layout.addWidget(self.checkpauseStim)
         layout.addWidget(self.activate_button)
@@ -1333,9 +1402,97 @@ class Interface(QMainWindow):
 
         return layout
 
-    def pausefonctiontosendstim(self):
+    def create_optimization_mode(self):
+        """Créer les boutons pour choisir si la stimulation est en mode manuel ou optimisé."""
+        groupbox = QGroupBox("Stimulation Parameter Mode:")
+        layout = QGridLayout()
+
+        # Manual Mode
+        self.manual_mode_button = QRadioButton("Manual", self)
+        self.manual_mode_button.setChecked(True)
+        self.manual_mode_button.toggled.connect(self.manual_optim_chosen)
+        self.update_button = QPushButton("Actualiser Paramètre Stim")
+        self.update_button.setEnabled(False)
+        self.update_button.clicked.connect(self.update_stimulation)
+
+        layout.addWidget(self.manual_mode_button, 0, 0, 1, 1)
+        layout.addWidget(self.update_button, 0, 1, 1, 1)
+
+        # Bayesian Optimization Mode
+        self.bayesian_mode_button = QRadioButton("Bayesian Optimization", self)
+        self.bayesian_mode_button.toggled.connect(self.bayesian_optim_chosen)
+        self.start_bayesian_optim_button = QPushButton("Start Optim")
+        self.start_bayesian_optim_button.setEnabled(False)
+        self.start_bayesian_optim_button.clicked.connect(self.start_bayesian_optimization)
+        self.stop_bayesian_optim_button = QPushButton("Early Termination Optim")
+        self.stop_bayesian_optim_button.setEnabled(False)
+        self.stop_bayesian_optim_button.clicked.connect(self.stop_bayesian_optimization)
+
+        layout.addWidget(self.bayesian_mode_button, 1, 0, 1, 1)
+        layout.addWidget(self.start_bayesian_optim_button, 1, 1, 1, 1)
+        layout.addWidget(self.stop_bayesian_optim_button, 1, 2, 1, 1)
+
+        # Iterative Learning Control Mode
+        self.ilc_mode_button = QRadioButton("Iterative Learning Control", self)
+        self.ilc_mode_button.toggled.connect(self.ilc_optim_chosen)
+        self.ilc_mode_button.setEnabled(False)  # TODO: Charbie -> Implement ILC, for now always disabled
+        layout.addWidget(self.ilc_mode_button, 2, 0, 1, 1)
+
+        # Channel Bounds Section
+        self.channel_bounds_inputs = {f"Canal {i}": {} for i in range(1, 9)}
+        for i in range(1, 9):
+            channel_label = QLabel(f"Canal {i} :")
+            layout.addWidget(channel_label, 3, i - 1)
+
+            for parameter_name in DEFAULT_BOUNDS.keys():
+                if parameter_name not in self.channel_bounds_inputs:
+                    self.channel_bounds_inputs[parameter_name] = {}
+
+                channel_min_bound = QSpinBox()
+                channel_min_bound.setRange(DEFAULT_BOUNDS[parameter_name][0], DEFAULT_BOUNDS[parameter_name][1])
+                channel_min_bound.setValue(DEFAULT_BOUNDS[parameter_name][0])
+                channel_max_bound = QSpinBox()
+                channel_max_bound.setRange(DEFAULT_BOUNDS[parameter_name][0], DEFAULT_BOUNDS[parameter_name][1])
+                channel_max_bound.setValue(DEFAULT_BOUNDS[parameter_name][1])
+
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name] = [channel_min_bound, channel_max_bound]
+                layout.addWidget(channel_min_bound, 4, i - 1, 1, 1)
+                layout.addWidget(channel_max_bound, 5, i - 1, 1, 1)
+
+        stable_cycles_label = QLabel(f"There were <b>{self.num_stable_cycles}</b> stable cycles")
+        layout.addWidget(stable_cycles_label, 0, 5)
+        current_cost_label = QLabel(f"The current cost is <b>{self.current_cost}</b>")
+        layout.addWidget(current_cost_label, 1, 5)
+        discomfort_label = QLabel(f"Discomfort  :")
+        layout.addWidget(discomfort_label, 2, 4)
+        discomfort_box = QSpinBox()
+        discomfort_box.setRange(0, 10)
+        discomfort_box.setValue(self.discomfort)
+        layout.addWidget(discomfort_box, 2, 5)
+        discomfort_button = QPushButton("Set discomfort")
+        discomfort_button.clicked.connect(lambda: setattr(self, "discomfort", discomfort_box.value()))
+        layout.addWidget(discomfort_button, 2, 6)
+
+        # Set the groupbox layout
+        groupbox.setLayout(layout)
+        return groupbox
+
+    def set_channel_inputs(
+        self, channel, channel_layout, name_input, amplitude_input, pulse_width_input, frequency_input, mode_input
+    ):
+        # Enregistrer les widgets pour le canal sélectionné
+        self.channel_inputs[channel] = {
+            "layout": channel_layout,
+            "name_input": name_input,
+            "amplitude_input": amplitude_input,
+            "pulse_width_input": pulse_width_input,
+            "frequency_input": frequency_input,
+            "mode_input": mode_input,
+        }
+
+    def pause_fonction_to_send_stim(self):
         """Met à jour l'état d'envoi de stimulation"""
-        self.dolookneedsendstim = not self.checkpauseStim.isChecked()
+        self.do_look_need_send_stim = not self.checkpauseStim.isChecked()
 
     def apply_same_settings_to_all_channels(self):
         """Applique les mêmes paramètres à tous les canaux"""
@@ -1377,6 +1534,19 @@ class Interface(QMainWindow):
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
 
+    def start_bayesian_optimization(self):
+        """Démarre l'optimisation Bayésienne."""
+        self.bayesian_optimizer = BayesianOptimizer(self)
+        result = self.bayesian_optimizer.perform_bayesian_optim()
+        self.save_optimal_bayesian_parameters(result)
+        self.bayesian_optimizer.plot_bayesian_optim_results(result)
+        # TODO : Charbie -> stimulate with these parameters for a few minutes ?
+
+    def stop_bayesian_optimization(self):
+        """Arrête l'optimisation Bayésienne."""
+        # TODO save the best parameters
+        pass
+    
     def update_connection_status(self, connected, message):
         """Met à jour le statut de connexion"""
         self.connection_status.setText(f"Statut: {message}")
