@@ -30,7 +30,10 @@ import random
 from collections import deque
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+from matplotlib import colormaps as cm
 import threading
+from skopt import gp_minimize
+from skopt.space import Real
 
 
 # Configuration du logging
@@ -58,6 +61,7 @@ STOP_STIMULATOR = False
 MASS = 70  # Initial value only (will be set by Interface.update_mass)
 MODEL_FILE_NAME = None  # Will be set by Interface.upload_file
 MODEL = None  # Will be set by Interface.upload_file
+NB_DOF = 45
 
 # Instance Redis globale
 redis_client = None
@@ -360,6 +364,12 @@ class DataProcessor:
                             safe_redis_operation(redis_client.rpush, "q", json.dumps(q.tolist()))
                             safe_redis_operation(redis_client.ltrim, "q",  -CYCLE_BUFFER_LENGTH, -1)
 
+                            safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "qdot",  -CYCLE_BUFFER_LENGTH, -1)
+
+                            safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "ddotq",  -CYCLE_BUFFER_LENGTH, -1)
+
                             safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
                             safe_redis_operation(redis_client.ltrim, "tau",  -CYCLE_BUFFER_LENGTH, -1)
 
@@ -483,18 +493,59 @@ class BayesianOptimizer:
         # self.cycle_counter = 0
         self.current_cycle = None
 
+        # Optimization parameters
+        # Define the variable bounds
+        self.bounds = [
+            Real(20, 50, name="R_frequency"),  # Hz
+            Real(8, 20, name="R_intensity"),  # mA
+            Real(200, 500, name="R_width"),  # micros
+            Real(20, 50, name="L_frequency"),  # Hz
+            Real(8, 20, name="L_intensity"),  # mA
+            Real(200, 500, name="L_width"),  # micros
+        ]
+
+        # Define the objective weightings
+        # TODO: Charbie -> how do we chose which objectives to minimize ?
+        self.weight_comddot = 1
+        self.weight_angular_momentum = 1
+        self.weight_enegy = 1
+        self.weight_ankle_power = -1
+
+
     def start_optimizing(self):
         self.running = True
 
         while self.running:
             try:
                 if is_redis_connected():
-                    self.process()
-                    self.processing_complete = "Processing complete"
-                # time.sleep(0.1)  # Réduire la fréquence de traitement
+                    """Perform Bayesian optimization using Gaussian Processes."""
+
+                    # gp_minimize will try to find the minimal value of the objective function.
+                    result = gp_minimize(
+                        func=lambda params: self.make_an_iteration(params),
+                        dimensions=self.bounds,
+                        n_calls=100,  # number of evaluations of f
+                        acq_func="LCB",  # "LCB", "EI", "PI", "gp_hedge", "EIps", "PIps"
+                        kappa=5,  # *
+                        random_state=0,  # *
+                        n_jobs=1,
+                    )  # x0, y0, kappa[exploitation, exploration], xi [minimal improvement default 0.01]
+
+                    # TODO: stop when the same point has been hit t time (t=5 in general)
+
+                    optimal_parameter_values = result.x
+
+                    # TODO: save the optimal parameters
+
+                    # TODO: Plot the optimal values
+
             except Exception as e:
                 logging.error(f"Erreur dans BayesianOptimizer: {e}")
                 time.sleep(1)
+
+    def stop(self):
+        self.running = False
+        self.wait()
 
     def process(self):
         try:
@@ -503,8 +554,11 @@ class BayesianOptimizer:
 
             cycle_indices = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("cycle_idx", 0, -1)]
             q_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
+            qdot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qdot", 0, -1)]
+            qddot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qddot", 0, -1)]
+            tau_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
 
-            if len(q_all) != len(cycle_indices):
+            if len(q_all) != len(cycle_indices) or len(qdot_all) != len(cycle_indices) or len(qddot_all) != len(cycle_indices) or len(tau_all) != len(cycle_indices):
                 # We are in a weird state, it is better to wait for the next loop
                 return
 
@@ -517,13 +571,302 @@ class BayesianOptimizer:
                 q = np.array(q_all[cycle_indices.index(self.current_cycle)])
                 print("q recu : ", q.shape)
 
+            # TODO: if bounds are updated, we need to update the bounds in the optimizer
+
+
+
+
         except Exception as e:
             logging.error(f"Erreur lors loptimisation bayesienne: {e}")
 
 
-    def stop(self):
-        self.running = False
-        self.wait()
+    def compute_mean_cycle(self, cycles):
+
+        global MARKER_FREQUENCY
+
+        nb_frames = [cycles["nb_frames"][-i_cycle] for i_cycle in range(10)]
+        nb_interpolation_frames = np.mean(np.array(nb_frames))
+        q_interpolated = np.zeros((NB_DOF, nb_interpolation_frames, 10))
+        qdot_interpolated = np.zeros((NB_DOF, nb_interpolation_frames, 10))
+        qddot_interpolated = np.zeros((NB_DOF, nb_interpolation_frames, 10))
+        tau_interpolated = np.zeros((NB_DOF, nb_interpolation_frames, 10))
+        for i_cycle in range(10):
+            current_q = cycles["q"][-i_cycle]
+            current_qdot = cycles["qdot"][-i_cycle]
+            current_qddot = cycles["qddot"][-i_cycle]
+            current_tau = cycles["tau"][-i_cycle]
+            current_nb_frames = len(current_q)
+            time_vector = np.linspace(0, (current_nb_frames - 1) * 1 / MARKER_FREQUENCY, current_nb_frames)
+            time_vector_interpolated = np.linspace(
+                0, (current_nb_frames - 1) * 1 / MARKER_FREQUENCY, nb_interpolation_frames
+            )
+
+            interp_func_q = interp1d(current_q, time_vector, kind="cubic")
+            interp_func_qdot = interp1d(current_qdot, time_vector, kind="cubic")
+            interp_func_qddot = interp1d(current_qddot, time_vector, kind="cubic")
+            interp_func_tau = interp1d(current_tau, time_vector, kind="cubic")
+
+            q_interpolated[:, :, i_cycle] = interp_func_q(time_vector_interpolated)
+            qdot_interpolated[:, :, i_cycle] = interp_func_qdot(time_vector_interpolated)
+            qddot_interpolated[:, :, i_cycle] = interp_func_qddot(time_vector_interpolated)
+            tau_interpolated[:, :, i_cycle] = interp_func_tau(time_vector_interpolated)
+
+        q_mean = np.mean(q_interpolated, axis=2)
+        qdot_mean = np.mean(qdot_interpolated, axis=2)
+        qddot_mean = np.mean(qddot_interpolated, axis=2)
+        tau_mean = np.mean(tau_interpolated, axis=2)
+
+        return q_mean, qdot_mean, qddot_mean, tau_mean
+
+    def make_an_iteration(self, params):
+
+        # Current values of the optimized FES parameters
+        R_frequency = params[0]
+        R_intensity = params[1]
+        R_width = params[2]
+        L_frequency = params[3]
+        L_intensity = params[4]
+        L_width = params[5]
+
+        # Send FES with these parameter values
+        # Setup Right leg
+        self.visualization_widget.set_chanel_inputs(
+            channel=0,
+            channel_layout=None,
+            name_input="Right",
+            amplitude_input=R_intensity,  # TODO: @ophelielariviere, is it the right parameter ?
+            pulse_width_input=R_width,
+            frequency_input=R_frequency,
+            mode_input=Modes.SINGLE,
+        )
+        # Setup Left leg
+        self.visualization_widget.set_chanel_inputs(
+            channel=1,
+            channel_layout=None,
+            name_input="Left",
+            amplitude_input=L_intensity,  # TODO: @ophelielariviere, is it the right parameter ?
+            pulse_width_input=L_width,
+            frequency_input=L_frequency,
+            mode_input=Modes.SINGLE,
+        )
+        # Stimulate
+        self.visualization_widget.start_stimulation(self, [0, 1])
+
+        # Collect data while waiting for the subject to get a stable walking pattern with these parameters
+        cycles = {
+            # "StanceDuration_L": [],
+            # "StanceDuration_R": [],
+            # "Cycleduration": [],
+            # "StepWidth": [],
+            # "StepLength_L": [],
+            # "StepLength_R": [],
+            # "PropulsionDuration_L": [],
+            # "PropulsionDuration_R": [],
+            # "Cadence": [],
+            "q": [],
+            "qdot": [],
+            "qddot": [],
+            "tau": [],
+            "nb_frames": [],
+        }
+        old_cycledata = None
+        new_cycledata = "Fake_data"
+        stable = False
+        while not stable:
+            while old_cycledata == new_cycledata:  # No new data to collect
+                new_cycledata = self.visualization_widget.buffer.get()
+                time.sleep(0.1)
+            # Add the new cycle data to the list of cycles
+            new_gait_parameters = new_cycledata["gait_parameter"]
+            new_q = new_cycledata["Angle"]
+            new_qdot = new_cycledata["VitAng"]
+            new_qddot = new_cycledata["AccAng"]
+            new_tau = new_cycledata["Tau"]
+            cycles["StanceDuration_L"] += new_gait_parameters["StanceDuration_L"]
+            cycles["StanceDuration_R"] += new_gait_parameters["StanceDuration_R"]
+            cycles["Cycleduration"] += new_gait_parameters["Cycleduration"]
+            cycles["StepWidth"] += new_gait_parameters["StepWidth"]
+            cycles["StepLength_L"] += new_gait_parameters["StepLength_L"]
+            cycles["StepLength_R"] += new_gait_parameters["StepLength_R"]
+            cycles["PropulsionDuration_L"] += new_gait_parameters["PropulsionDuration_L"]
+            cycles["PropulsionDuration_R"] += new_gait_parameters["PropulsionDuration_R"]
+            cycles["Cadence"] += new_gait_parameters["Cadence"]
+            cycles["q"] += new_q
+            cycles["qdot"] += new_qdot
+            cycles["qddot"] += new_qddot
+            cycles["tau"] += new_tau
+            cycles["nb_frames"] += new_q.shape[1]
+            if len(cycles["Cycleduration"]) > 10:
+                # Compute the std of the last 10 cycles
+                StanceDuration_L_std = np.nanstd(cycles["StanceDuration_L"][-10:])
+                StanceDuration_R_std = np.nanstd(cycles["StanceDuration_R"][-10:])
+                Cycleduration_std = np.nanstd(cycles["Cycleduration"][-10:])
+                StepWidth_std = np.nanstd(cycles["StepWidth"][-10:])
+                StepLength_L_std = np.nanstd(cycles["StepLength_L"][-10:])
+                StepLength_R_std = np.nanstd(cycles["StepLength_R"][-10:])
+                PropulsionDuration_L_std = np.nanstd(cycles["PropulsionDuration_L"][-10:])
+                PropulsionDuration_R_std = np.nanstd(cycles["PropulsionDuration_R"][-10:])
+                Cadence_std = np.nanstd(cycles["Cadence"][-10:])
+
+                # Check if the last 10 cycles are stable
+                stable = (
+                        StanceDuration_L_std < 0.05  # 5% of the cycle
+                        and StanceDuration_R_std < 0.05  # 5% of the cycle
+                        and Cycleduration_std < 0.05  # 5% of the cycle
+                        and StepWidth_std < 0.05  # 5cm
+                        and StepLength_L_std < 0.05  # 5cm
+                        and StepLength_R_std < 0.05  # 5cm
+                        and PropulsionDuration_L_std < 0.05  # 5% of the cycle
+                        and PropulsionDuration_R_std < 0.05  # 5% of the cycle
+                        and Cadence_std < 5
+                )
+            old_cycledata = new_cycledata
+
+        # Stop the stimulation
+        self.visualization_widget.pause_stimulation()
+
+        # Compute the mean cycle
+        q_mean, qdot_mean, qddot_mean, tau_mean = self.compute_mean_cycle(cycles)
+
+        # Compute objective values
+        objective_value = self.objective(self.model, q_mean, qdot_mean, qddot_mean, tau_mean, R_intensity,
+                                         L_intensity)
+
+        return objective_value
+
+    @staticmethod
+    def compute_com_acceleration(model: biorbd.Model, q: np.ndarray, qdot: np.ndarray, qddot: np.ndarray):
+
+        nb_frames = q.shape[1]
+
+        comddot = np.zeros((nb_frames,))
+        for i_frame in range(nb_frames):
+            comddot[i_frame] = np.linalg.norm(
+                model.CoMddot(q[:, i_frame], qdot[:, i_frame], qddot[:, i_frame]).to_array()
+            )
+
+        return comddot
+
+    @staticmethod
+    def compute_angular_momentum(model: biorbd.Model, q: np.ndarray, qdot: np.ndarray, qddot: np.ndarray):
+
+        nb_frames = q.shape[1]
+
+        angular_momentum = np.zeros((nb_frames,))
+        for i_frame in range(nb_frames):
+            angular_momentum[i_frame] = np.linalg.norm(
+                model.angularMomentum(q[:, i_frame], qdot[:, i_frame]).to_array()
+            )
+
+        return angular_momentum
+
+    @staticmethod
+    def compute_energy(qdot, tau, R_intensity, L_intensity, time_vector):
+        """
+        Since the time is the same, min energy and power gives the same thing (same min).
+        """
+
+        voltage = 30  # TODO: @ophelielariviere, what is the voltage ?
+        power_stim = np.abs(R_intensity * voltage) + np.abs(L_intensity * voltage)
+        power_total = np.sum(np.abs(tau * qdot), axis=0)
+        power_human = power_total - power_stim
+        energy_human = np.trapezoid(power_human, x=time_vector)
+
+        return energy_human
+
+    def compute_ankle_power(self, qdot, tau, time_vector):
+        # TODO: find which idx is the flexion [0, 1, 2]
+        ankle_index = [self.dof_corr["RAnkle"][0], self.dof_corr["LAnkle"][0]]
+        sum_ankles = np.sum(np.abs(tau[ankle_index, :] * qdot[ankle_index, :]), axis=0)
+        return np.trapezoid(sum_ankles, x=time_vector)
+
+
+    def objective(self, model, q, qdot, qddot, tau, R_intensity, L_intensity):
+
+        nb_frames = q.shape[1]
+        read_frequency = 100  # Hz  # TODO: @ophelielariviere, is it always 100 Hz ?
+        time_vector = np.linspace(0, (nb_frames - 1) * 1 / read_frequency, nb_frames)
+
+        comddot = self.compute_com_acceleration(model, q, qdot, qddot)
+        angular_momentum = self.compute_angular_momentum(model, q, qdot, qddot)
+        energy_human = self.compute_energy(qdot, tau, R_intensity, L_intensity, time_vector)
+        power_ankle = self.compute_ankle_power(self, qdot, tau, time_vector)
+
+        return (
+                self.weight_comddot * comddot
+                + self.weight_angular_momentum * angular_momentum
+                + self.weight_enegy * energy_human
+                + self.weight_ankle_power * power_ankle
+        )
+
+    def save_optimal_bayesian_parameters(self, result):
+        """
+        result contains:
+            - fun [float]: function value at the minimum.
+            - models: surrogate models used for each iteration.
+            - x_iters [list of lists]: location of function evaluation for each iteration.
+            - func_vals [array]: function value for each iteration.
+            - space [Space]: the optimization space.
+            - specs [dict]`: the call specifications.
+            - rng [RandomState instance]: State of the random state at the end of minimization.
+        """
+        # TODO
+
+        save_file_name = self.visualization_widget.path_to_saveData + "optimal_bayesian_parameters.txt"
+        with open(save_file_name, "w") as f:
+            f.write("Optimal parameters found through Bayesian optimization : \n\n")
+            f.write("Frequency right = %.4f\n" % result.x[0])
+            f.write("Intensity right = %.4f\n" % result.x[1])
+            f.write("Width right = %.4f\n" % result.x[2])
+            f.write("Frequency left = %.4f\n" % result.x[3])
+            f.write("Intensity left = %.4f\n" % result.x[4])
+            f.write("Width left = %.4f\n" % result.x[5])
+            f.write("\nOptimal cost function value = %.4f\n" % result.fun)
+        return
+
+    def plot_bayesian_optim_results(self, result):
+        # TODO
+
+        print("Best found minimum:")
+        print("X = %.4f, Y = %.4f" % (result.x[0], result.x[1]))
+        print("f(x,y) = %.4f" % result.fun)
+
+        # Optionally, plot convergence
+        fig = plt.figure(figsize=(12, 5))
+        ax0 = fig.add_subplot(131)
+        ax1 = fig.add_subplot(132, projection="3d")
+        ax2 = fig.add_subplot(133, projection="3d")
+
+        # Convergence plot
+        ax0.plot(result.func_vals, marker="o")
+        ax0.set_title("Convergence Plot")
+        ax0.set_xlabel("Number of calls")
+        ax0.set_ylabel("Objective function value")
+
+        # Plot the function sampling on the right side
+        x_iters_array = np.array(result.x_iters)
+        func_vals_array = np.array(result.func_vals)
+        colors_min = np.min(func_vals_array)
+        colors_max = np.max(func_vals_array)
+        normalized_cmap = (func_vals_array - colors_min) / (colors_max - colors_min)
+        colors = cm["viridis"](normalized_cmap)
+        p1 = ax1.scatter(x_iters_array[:, 0], x_iters_array[:, 1], x_iters_array[:, 2], c=colors, marker=".")
+        ax1.set_xlabel("Frequency")
+        ax1.set_ylabel("Intensity")
+        ax1.set_zlabel("Width")
+        ax1.set_title("Function sampling Right")
+
+        # Plot the function sampling on the left side
+        p2 = ax2.scatter(x_iters_array[:, 3], x_iters_array[:, 4], x_iters_array[:, 5], c=colors, marker=".")
+        ax2.set_xlabel("Frequency")
+        ax2.set_ylabel("Intensity")
+        ax2.set_zlabel("Width")
+        ax2.set_title("Function sampling Left")
+
+        cbar = fig.colorbar(p1)
+        cbar.set_label("Objective function value")
+        plt.show()
+
 
 
 class StimulationProcessor:
@@ -702,6 +1045,7 @@ class StimulationProcessor:
                     self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
                     self.stimulator_is_sending_stim = True
                     self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
+
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi de la stimulation: {e}")
             self.stimulation_status = f"Erreur stimulation: {str(e)}"

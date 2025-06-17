@@ -1,10 +1,14 @@
 
-Bertec_self_paced/__pycache__/
+.DS_Store
 
-Com/__pycache__/
+RealTime_GaitProcess/__pycache__/
 
 Stim_P24/__pycache__/
 
-.DS_Store
+Com/__pycache__/
+
+Bertec_self_paced/__pycache__/
 
 Com/cycle_identification.png
+
+__pycache__/
