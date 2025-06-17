@@ -44,6 +44,14 @@ REDIS_DB = 0
 MARKER_FREQUENCY = 100
 FORCE_MIN_THRESHOLD = 0.05
 
+# Flags to check for stimulation and processing
+ACTIVATE_STIMULATOR = False
+START_STIMULATION = False
+STOP_STIMULATOR = False
+
+# Single value shared variables (instead of duplicating the information in the redis database)
+MASS = 70  # Initial value only (will be set by set by Interface.update_mass)
+
 # Instance Redis globale
 redis_client = None
 
@@ -215,10 +223,9 @@ class DataProcessor:
     def identify_cycle_start(self, forces_all):
         print("Identifying cycle start...")
         force_filtered = self.data_filter(forces_all[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
-        subject_mass = float(safe_redis_operation(redis_client.lrange, "participant_mass", -1, -1)[0])
         current_cycle_idx = np.ones((forces_all[0].shape[1], )) * self.cycle_counter
 
-        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD*2 * subject_mass
+        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD*2 * MASS
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
         toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
@@ -405,9 +412,24 @@ class StimulationProcessor:
         self.data_received = "Not initialized"
 
     def start_processing(self):
+        global ACTIVATE_STIMULATOR, START_STIMULATION, STOP_STIMULATOR
+
         while self.running:
             try:
                 if is_redis_connected():
+
+                    if ACTIVATE_STIMULATOR:
+                        self.activate_stimulator()
+                        ACTIVATE_STIMULATOR = False
+
+                    if START_STIMULATION:
+                        self.call_start_stimulation(self.last_channels)
+                        START_STIMULATION = False
+
+                    if STOP_STIMULATOR:
+                        self.stop_stimulator()
+                        STOP_STIMULATOR = False
+
                     self.stimulation_process()
                 time.sleep(0.01)
             except Exception as e:
@@ -430,22 +452,17 @@ class StimulationProcessor:
             force_data = np.take(forces_all, new_indices, axis=2)
             self.processed_frame_ids.extend(new_frame_ids)
 
-            # Récupérer les paramètres de stimulation
-            stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
-            if stim_params:
-                stimulator_parameters = json.loads(stim_params[-1])
-                subject_mass = float(safe_redis_operation(redis_client.lrange, "participant_mass", -1, -1)[0])
-                if len(force_data) > 0:
-                    fyr = force_data[0][2]  # Force Y droite
-                    fzr = force_data[0][5]  # Force Z droite
-                    fyl = force_data[0][8]  # Force Y gauche
-                    fzl = force_data[0][11]  # Force Z gauche
-                    if len(fyr) > 20 and subject_mass:
-                        info_feet = {
-                            "right": self.detect_phase_force(fyr, fzr, fzl, 1, subject_mass),
-                            "left": self.detect_phase_force(fyl, fzl, fzr, 2, subject_mass),
-                        }
-                        self.manage_stimulation(info_feet, stimulator_parameters)
+            if len(force_data) > 0:
+                fyr = force_data[0][2]  # Force Y droite
+                fzr = force_data[0][5]  # Force Z droite
+                fyl = force_data[0][8]  # Force Y gauche
+                fzl = force_data[0][11]  # Force Z gauche
+                if len(fyr) > 20 and MASS:
+                    info_feet = {
+                        "right": self.detect_phase_force(fyr, fzr, fzl, 1, MASS),
+                        "left": self.detect_phase_force(fyl, fzl, fzr, 2, MASS),
+                    }
+                    self.manage_stimulation(info_feet)
         except Exception as e:
             logging.error(f"Erreur dans stimulation_process: {e}")
 
@@ -480,7 +497,7 @@ class StimulationProcessor:
             logging.error(f"Erreur dans detect_phase_force: {e}")
             return "nothing"
 
-    def manage_stimulation(self, info_feet, stimulator_parameters):
+    def manage_stimulation(self, info_feet):
         try:
             right = info_feet["right"]
             left = info_feet["left"]
@@ -499,7 +516,7 @@ class StimulationProcessor:
 
             if new_channels != self.last_channels:
                 if new_channels:
-                    self.call_start_stimulation(new_channels, stimulator_parameters)
+                    self.call_start_stimulation(new_channels)
                     self.stimulation_status = f"Stim send to canal(s): {new_channels}"
                 else:
                     self.call_pause_stimulation()
@@ -518,7 +535,7 @@ class StimulationProcessor:
             logging.error(f"Erreur lors de l'activation du stimulateur: {e}")
             self.stimulation_status = f"Erreur: {str(e)}"
 
-    def call_start_stimulation(self, channel_to_send, stimulator_parameters):
+    def call_start_stimulation(self, channel_to_send):
         try:
             if not self.stimulator_is_active:
                 self.activate_stimulator()
@@ -527,25 +544,29 @@ class StimulationProcessor:
             if self.stimulator_is_sending_stim:
                 self.call_pause_stimulation()
 
-            channels_instructions = [
-                Channel(
-                    no_channel=channel,
-                    name=stimulator_parameters[str(channel)]["name"],
-                    amplitude=stimulator_parameters[str(channel)]["amplitude"] if channel in channel_to_send else 0,
-                    pulse_width=stimulator_parameters[str(channel)]["pulse_width"],
-                    frequency=stimulator_parameters[str(channel)]["frequency"],
-                    mode=getattr(Modes, stimulator_parameters[str(channel)]["mode"]),
-                    device_type=Device.Rehastimp24,
-                )
-                for channel in stimulator_parameters
-            ]
+            stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
+            if stim_params:
+                stimulator_parameters = json.loads(stim_params[-1])
 
-            if channels_instructions:
-                self.stimulator.init_stimulation(list_channels=channels_instructions)
-                self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
-                self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
-                self.stimulator_is_sending_stim = True
-                self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
+                channels_instructions = [
+                    Channel(
+                        no_channel=channel,
+                        name=stimulator_parameters[str(channel)]["name"],
+                        amplitude=stimulator_parameters[str(channel)]["amplitude"] if channel in channel_to_send else 0,
+                        pulse_width=stimulator_parameters[str(channel)]["pulse_width"],
+                        frequency=stimulator_parameters[str(channel)]["frequency"],
+                        mode=getattr(Modes, stimulator_parameters[str(channel)]["mode"]),
+                        device_type=Device.Rehastimp24,
+                    )
+                    for channel in stimulator_parameters
+                ]
+
+                if channels_instructions:
+                    self.stimulator.init_stimulation(list_channels=channels_instructions)
+                    self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
+                    self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
+                    self.stimulator_is_sending_stim = True
+                    self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi de la stimulation: {e}")
             self.stimulation_status = f"Erreur stimulation: {str(e)}"
@@ -585,23 +606,10 @@ class Interface(QMainWindow):
         self.setMinimumSize(800, 600)
         self.channel_inputs = {}
         self.num_config = 0
-        self.mass = 70
         self.process_idik = False
         self.dolookneedsendstim = False
         self.model = None
         self.DataToPlot = self.initialize_data_to_plot()
-
-        # Redis manager
-        self.redis_manager = RedisConnectionManager()
-
-        # Data receiver (goal: interaction with Qualisys)
-        self.data_receiver = DataReceiver("127.0.0.1", 50000)
-
-        # Data processor (goal: ID, IK)
-        self.data_processor = DataProcessor()
-
-        # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
-        self.stimulation_processor = StimulationProcessor()
 
         # Initialize UI components
         self.init_ui()
@@ -610,12 +618,6 @@ class Interface(QMainWindow):
         # self.graph_update_timer = QTimer(self)
         # self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
         # self.graph_update_timer.start(100)
-
-        # --- Thread activation --- #
-        threading.Thread(target=self.redis_manager.run, daemon=False).start()
-        threading.Thread(target=self.data_receiver.start_receiving, daemon=False).start()
-        threading.Thread(target=self.data_processor.start_processing, daemon=False).start()
-        threading.Thread(target=self.stimulation_processor.start_processing, daemon=False).start()
 
 
     def closeEvent(self, event):
@@ -714,15 +716,13 @@ class Interface(QMainWindow):
 
     def update_mass(self, mass_value):
         """Met à jour la masse du participant"""
-        self.mass = float(mass_value)
         if not is_redis_connected():
             QMessageBox.warning(self, "Erreur", "La connexion Redis n'est pas établie. Veuillez patienter...")
             return
 
         try:
-            safe_redis_operation(redis_client.rpush, "participant_mass", str(self.mass))
-            safe_redis_operation(redis_client.ltrim, "participant_mass",  -BUFFER_LENGTH, -1)
-            logging.info(f"Masse mise à jour: {self.mass} kg")
+            MASS = float(mass_value)
+            logging.info(f"Masse mise à jour: {MASS} kg")
         except Exception as e:
             logging.error(f"Erreur lors de la mise à jour de la masse: {str(e)}")
             QMessageBox.critical(self, "Erreur", f"Impossible de mettre à jour la masse: {str(e)}")
@@ -810,21 +810,36 @@ class Interface(QMainWindow):
                     "mode_input": mode_input,
                 }
 
+    @staticmethod
+    def activate_stimulator():
+        global ACTIVATE_STIMULATOR
+        ACTIVATE_STIMULATOR=True
+
+    @staticmethod
+    def start_stimulation():
+        global START_STIMULATION
+        START_STIMULATION=True
+
+    @staticmethod
+    def stop_stimulator():
+        global STOP_STIMULATOR
+        STOP_STIMULATOR=True
+
     def create_stimulation_controls(self):
         """Crée les contrôles de stimulation"""
         layout = QHBoxLayout()
 
         self.activate_button = QPushButton("Activer Stimulateur")
-        self.activate_button.clicked.connect(self.stimulation_processor.activate_stimulator)
+        self.activate_button.clicked.connect(self.activate_stimulator)
 
         self.update_button = QPushButton("Actualiser Paramètres")
         self.update_button.clicked.connect(self.update_stimulation_parameter)
 
         self.start_button = QPushButton("Envoyer Stimulation")
-        self.start_button.clicked.connect(self.stimulation_processor.call_start_stimulation)
+        self.start_button.clicked.connect(self.start_stimulation)
 
         self.stop_button = QPushButton("Arrêter Stimulateur")
-        self.stop_button.clicked.connect(self.stimulation_processor.stop_stimulator)
+        self.stop_button.clicked.connect(self.stop_stimulator)
 
         self.checkpauseStim = QCheckBox("Stop tying send stim")
         self.checkpauseStim.setChecked(True)
@@ -1018,7 +1033,27 @@ def main():
     app = QApplication(sys.argv)
     interface = Interface()
     interface.show()
-    sys.exit(app.exec_()) #  Start the GUI
+
+    # Redis manager
+    redis_manager = RedisConnectionManager()
+
+    # Data receiver (goal: interaction with Qualisys)
+    data_receiver = DataReceiver("127.0.0.1", 50000)
+
+    # Data processor (goal: ID, IK)
+    data_processor = DataProcessor()
+
+    # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
+    stimulation_processor = StimulationProcessor()
+
+    # --- Thread activation --- #
+    threading.Thread(target=redis_manager.run, daemon=False).start()
+    threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
+    threading.Thread(target=data_processor.start_processing, daemon=False).start()
+    threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+
+    # Start the GUI
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
