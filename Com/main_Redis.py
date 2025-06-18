@@ -6,8 +6,8 @@ The Redis database contains
 1. Data at each frame (force, mks, mks_names, frame_ids)
 2. Data at each cycle (q, tau, cycle_ids)
 """
-
-
+import datetime
+import os.path
 import sys
 from enum import Enum
 import logging
@@ -57,6 +57,8 @@ FORCE_MIN_THRESHOLD = 0.05
 ACTIVATE_STIMULATOR = False
 START_STIMULATION = False
 STOP_STIMULATOR = False
+PROCESS_ID_IK = False
+RUN_OPTIMISATION = False
 
 # Single value shared variables (instead of duplicating the information in the redis database)
 MASS = 70  # Initial value only (will be set by Interface.update_mass)
@@ -68,6 +70,7 @@ DEFAULT_BOUNDS = {
     "Pulse Width": [0, 1000],  # Largeur d'impulsion en microsecondes
     "Frequency": [0, 200],  # Fréquence en Hz
 }
+DISCOMFORT = 0
 
 # Instance Redis globale
 redis_client = None
@@ -257,11 +260,12 @@ class DataProcessor:
         self.cycle_start_id = None
 
     def start_processing(self):
+        global PROCESS_ID_IK
         self.running = True
 
         while self.running:
             try:
-                if is_redis_connected():
+                if is_redis_connected() and PROCESS_ID_IK:
                     self.process()
                     self.processing_complete = "Processing complete"
                 # time.sleep(0.1)  # Réduire la fréquence de traitement
@@ -331,7 +335,7 @@ class DataProcessor:
                     if self.cycle_start_id is None:
                         # We skip on purpose everything before the first heel strike is detected
                         self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
-                        print("initiqlization : start id = ", self.cycle_start_id)
+                        print("initialization : start id = ", self.cycle_start_id)
                         self.processed_frame_ids.extend(new_frame_ids[:heel_strike_idx[0]])
                     else:
                         cycle_stop_id = str(new_frame_ids[heel_strike_idx[0]])
@@ -530,7 +534,7 @@ class BayesianOptimizer:
 
         while self.running:
             try:
-                if is_redis_connected():
+                if is_redis_connected() and RUN_OPTIMISATION:
                     """Perform Bayesian optimization using Gaussian Processes."""
 
                     # gp_minimize will try to find the minimal value of the objective function.
@@ -543,6 +547,8 @@ class BayesianOptimizer:
                         random_state=0,  # *
                         n_jobs=1,
                     )  # x0, y0, kappa[exploitation, exploration], xi [minimal improvement default 0.01]
+
+                    # TODO: allow for different chanel (now 0 and 1)
 
                     # TODO: stop when the same point has been hit t time (t=5 in general)
 
@@ -559,38 +565,6 @@ class BayesianOptimizer:
     def stop(self):
         self.running = False
         self.wait()
-
-    def process(self):
-        try:
-
-            global MODEL
-
-            cycle_indices = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("cycle_idx", 0, -1)]
-            q_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
-            qdot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qdot", 0, -1)]
-            qddot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qddot", 0, -1)]
-            tau_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
-
-            if len(q_all) != len(cycle_indices) or len(qdot_all) != len(cycle_indices) or len(qddot_all) != len(cycle_indices) or len(tau_all) != len(cycle_indices):
-                # We are in a weird state, it is better to wait for the next loop
-                return
-
-            if len(q_all) > 0 and len(cycle_indices) > 0:
-                if self.current_cycle is None:
-                    self.current_cycle = cycle_indices[0]
-                elif self.current_cycle < cycle_indices[-1]:
-                    self.current_cycle += 1
-
-                q = np.array(q_all[cycle_indices.index(self.current_cycle)])
-                print("q recu : ", q.shape)
-
-            # TODO: if bounds are updated, we need to update the bounds in the optimizer
-
-
-
-
-        except Exception as e:
-            logging.error(f"Erreur lors loptimisation bayesienne: {e}")
 
 
     def compute_mean_cycle(self, cycles):
@@ -631,7 +605,7 @@ class BayesianOptimizer:
 
         return q_mean, qdot_mean, qddot_mean, tau_mean
 
-    def make_an_iteration(self, params):
+    def set_stimulation_parameters(self, params):
 
         # Current values of the optimized FES parameters
         R_frequency = params[0]
@@ -641,29 +615,73 @@ class BayesianOptimizer:
         L_intensity = params[4]
         L_width = params[5]
 
-        # Send FES with these parameter values
-        # Setup Right leg
-        self.visualization_widget.set_chanel_inputs(
-            channel=0,
-            channel_layout=None,
-            name_input="Right",
-            amplitude_input=R_intensity,  # TODO: @ophelielariviere, is it the right parameter ?
-            pulse_width_input=R_width,
-            frequency_input=R_frequency,
-            mode_input=Modes.SINGLE,
-        )
-        # Setup Left leg
-        self.visualization_widget.set_chanel_inputs(
-            channel=1,
-            channel_layout=None,
-            name_input="Left",
-            amplitude_input=L_intensity,  # TODO: @ophelielariviere, is it the right parameter ?
-            pulse_width_input=L_width,
-            frequency_input=L_frequency,
-            mode_input=Modes.SINGLE,
-        )
+
+        stimulator_parameters = {}
+        stimulator_parameters["0"] = {
+            "name": f"Canal 0",
+            "amplitude": R_intensity,
+            "pulse_width": R_width,
+            "frequency": R_frequency,
+            "mode": "SINGLE",
+        }
+        stimulator_parameters["1"] = {
+            "name": f"Canal 1",
+            "amplitude": L_intensity,
+            "pulse_width": L_width,
+            "frequency": L_frequency,
+            "mode": "SINGLE",
+        }
+
+        if is_redis_connected():
+            try:
+                safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
+                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -FRAME_BUFFER_LENGTH, -1)
+                logging.info(f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {params}")
+            except Exception as e:
+                logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
+
+
+    def get_cycle_data(self):
+
+        no_new_data = True
+        while no_new_data:
+            cycle_indices = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("cycle_idx", 0, -1)]
+            q_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
+            qdot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qdot", 0, -1)]
+            qddot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qddot", 0, -1)]
+            tau_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
+
+            if len(q_all) != len(cycle_indices) or len(qdot_all) != len(cycle_indices) or len(qddot_all) != len(
+                    cycle_indices) or len(tau_all) != len(cycle_indices):
+                # We are in a weird state, it is better to wait for the next loop
+                continue
+
+            if len(q_all) > 0 and len(cycle_indices) > 0:
+                if self.current_cycle is None:
+                    self.current_cycle = cycle_indices[0]
+                elif self.current_cycle < cycle_indices[-1]:
+                    self.current_cycle += 1
+                else:
+                    continue
+
+                this_cycle_index = cycle_indices.index(self.current_cycle)
+                q = np.array(q_all[this_cycle_index])
+                qdot = np.array(qdot_all[this_cycle_index])
+                qddot = np.array(qddot_all[this_cycle_index])
+                tau = np.array(tau_all[this_cycle_index])
+                no_new_data = False
+
+        return q, qdot, qddot, tau
+
+
+    def make_an_iteration(self, params):
+        global START_STIMULATION, STOP_STIMULATOR
+
+        # Set the parameter values to test this iteration
+        self.set_stimulation_parameters(params)
+
         # Stimulate
-        self.visualization_widget.start_stimulation(self, [0, 1])
+        START_STIMULATION = True
 
         # Collect data while waiting for the subject to get a stable walking pattern with these parameters
         cycles = {
@@ -682,34 +700,26 @@ class BayesianOptimizer:
             "tau": [],
             "nb_frames": [],
         }
-        old_cycledata = None
-        new_cycledata = "Fake_data"
+
         stable = False
         while not stable:
-            while old_cycledata == new_cycledata:  # No new data to collect
-                new_cycledata = self.visualization_widget.buffer.get()
-                time.sleep(0.1)
-            # Add the new cycle data to the list of cycles
-            new_gait_parameters = new_cycledata["gait_parameter"]
-            new_q = new_cycledata["Angle"]
-            new_qdot = new_cycledata["VitAng"]
-            new_qddot = new_cycledata["AccAng"]
-            new_tau = new_cycledata["Tau"]
-            cycles["StanceDuration_L"] += new_gait_parameters["StanceDuration_L"]
-            cycles["StanceDuration_R"] += new_gait_parameters["StanceDuration_R"]
-            cycles["Cycleduration"] += new_gait_parameters["Cycleduration"]
-            cycles["StepWidth"] += new_gait_parameters["StepWidth"]
-            cycles["StepLength_L"] += new_gait_parameters["StepLength_L"]
-            cycles["StepLength_R"] += new_gait_parameters["StepLength_R"]
-            cycles["PropulsionDuration_L"] += new_gait_parameters["PropulsionDuration_L"]
-            cycles["PropulsionDuration_R"] += new_gait_parameters["PropulsionDuration_R"]
-            cycles["Cadence"] += new_gait_parameters["Cadence"]
-            cycles["q"] += new_q
-            cycles["qdot"] += new_qdot
-            cycles["qddot"] += new_qddot
-            cycles["tau"] += new_tau
-            cycles["nb_frames"] += new_q.shape[1]
-            if len(cycles["Cycleduration"]) > 10:
+            q_new, qdot_new, qddot_new, tau_new = self.get_cycle_data()
+
+            # cycles["StanceDuration_L"] += new_gait_parameters["StanceDuration_L"]
+            # cycles["StanceDuration_R"] += new_gait_parameters["StanceDuration_R"]
+            # cycles["Cycleduration"] += new_gait_parameters["Cycleduration"]
+            # cycles["StepWidth"] += new_gait_parameters["StepWidth"]
+            # cycles["StepLength_L"] += new_gait_parameters["StepLength_L"]
+            # cycles["StepLength_R"] += new_gait_parameters["StepLength_R"]
+            # cycles["PropulsionDuration_L"] += new_gait_parameters["PropulsionDuration_L"]
+            # cycles["PropulsionDuration_R"] += new_gait_parameters["PropulsionDuration_R"]
+            # cycles["Cadence"] += new_gait_parameters["Cadence"]
+            cycles["q"] += [q_new]
+            cycles["qdot"] += [qdot_new]
+            cycles["qddot"] += [qddot_new]
+            cycles["tau"] += [tau_new]
+            cycles["nb_frames"] += q_new.shape[1]
+            if len(cycles["q"]) > 10:
                 # Compute the std of the last 10 cycles
                 StanceDuration_L_std = np.nanstd(cycles["StanceDuration_L"][-10:])
                 StanceDuration_R_std = np.nanstd(cycles["StanceDuration_R"][-10:])
@@ -722,28 +732,30 @@ class BayesianOptimizer:
                 Cadence_std = np.nanstd(cycles["Cadence"][-10:])
 
                 # Check if the last 10 cycles are stable
-                stable = (
-                        StanceDuration_L_std < 0.05  # 5% of the cycle
-                        and StanceDuration_R_std < 0.05  # 5% of the cycle
-                        and Cycleduration_std < 0.05  # 5% of the cycle
-                        and StepWidth_std < 0.05  # 5cm
-                        and StepLength_L_std < 0.05  # 5cm
-                        and StepLength_R_std < 0.05  # 5cm
-                        and PropulsionDuration_L_std < 0.05  # 5% of the cycle
-                        and PropulsionDuration_R_std < 0.05  # 5% of the cycle
-                        and Cadence_std < 5
-                )
-            old_cycledata = new_cycledata
+                # TODO !!!
+                stable = True
+                # stable = (
+                #         StanceDuration_L_std < 0.05  # 5% of the cycle
+                #         and StanceDuration_R_std < 0.05  # 5% of the cycle
+                #         and Cycleduration_std < 0.05  # 5% of the cycle
+                #         and StepWidth_std < 0.05  # 5cm
+                #         and StepLength_L_std < 0.05  # 5cm
+                #         and StepLength_R_std < 0.05  # 5cm
+                #         and PropulsionDuration_L_std < 0.05  # 5% of the cycle
+                #         and PropulsionDuration_R_std < 0.05  # 5% of the cycle
+                #         and Cadence_std < 5
+                # )
 
         # Stop the stimulation
-        self.visualization_widget.pause_stimulation()
+        STOP_STIMULATOR = True
 
         # Compute the mean cycle
         q_mean, qdot_mean, qddot_mean, tau_mean = self.compute_mean_cycle(cycles)
 
         # Compute objective values
-        objective_value = self.objective(self.model, q_mean, qdot_mean, qddot_mean, tau_mean, R_intensity,
-                                         L_intensity)
+        R_intensity = params[1]
+        L_intensity = params[4]
+        objective_value = self.objective(q_mean, qdot_mean, qddot_mean, tau_mean, R_intensity, L_intensity)
 
         return objective_value
 
@@ -794,16 +806,17 @@ class BayesianOptimizer:
         return np.trapezoid(sum_ankles, x=time_vector)
 
 
-    def objective(self, model, q, qdot, qddot, tau, R_intensity, L_intensity):
+    def objective(self, q, qdot, qddot, tau, R_intensity, L_intensity):
+        global MODEL
 
         nb_frames = q.shape[1]
         read_frequency = 100  # Hz  # TODO: @ophelielariviere, is it always 100 Hz ?
         time_vector = np.linspace(0, (nb_frames - 1) * 1 / read_frequency, nb_frames)
 
-        comddot = self.compute_com_acceleration(model, q, qdot, qddot)
-        angular_momentum = self.compute_angular_momentum(model, q, qdot, qddot)
+        comddot = self.compute_com_acceleration(MODEL, q, qdot, qddot)
+        angular_momentum = self.compute_angular_momentum(MODEL, q, qdot, qddot)
         energy_human = self.compute_energy(qdot, tau, R_intensity, L_intensity, time_vector)
-        power_ankle = self.compute_ankle_power(self, qdot, tau, time_vector)
+        power_ankle = self.compute_ankle_power(qdot, tau, time_vector)
 
         return (
                 self.weight_comddot * comddot
@@ -823,10 +836,11 @@ class BayesianOptimizer:
             - specs [dict]`: the call specifications.
             - rng [RandomState instance]: State of the random state at the end of minimization.
         """
-        # TODO
+        global SAVE_PATH
 
-        save_file_name = self.visualization_widget.path_to_saveData + "optimal_bayesian_parameters.txt"
-        with open(save_file_name, "w") as f:
+        save_file_name = SAVE_PATH + "/optimal_bayesian_parameters.txt"
+        with open(save_file_name, "a+") as f:
+            f.write(f"\n\n************** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ***************\n\n")
             f.write("Optimal parameters found through Bayesian optimization : \n\n")
             f.write("Frequency right = %.4f\n" % result.x[0])
             f.write("Intensity right = %.4f\n" % result.x[1])
@@ -1098,7 +1112,6 @@ class Interface(QMainWindow):
         self.setMinimumSize(800, 600)
         self.channel_inputs = {}
         self.num_config = 0
-        self.process_idik = False
         self.do_look_need_send_stim = False
         self.stimulation_mode = StimulationMode.MANUAL
         self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in range(1, 9)}
@@ -1174,25 +1187,35 @@ class Interface(QMainWindow):
 
         # Modèle
         model_layout = QHBoxLayout()
-        self.model_label = QLabel("Aucun fichier sélectionné")
-        model_button = QPushButton("Charger un fichier")
-        model_button.clicked.connect(self.upload_file)
         self.checkbox_pro_idik = QCheckBox("Processus IK/ID")
         self.checkbox_pro_idik.setChecked(False)
         self.checkbox_pro_idik.setEnabled(False)
         self.checkbox_pro_idik.stateChanged.connect(self.need_process_idik)
+        self.model_label = QLabel("Aucun fichier sélectionné")
+        model_button = QPushButton("Charger un fichier")
+        model_button.clicked.connect(self.upload_file)
         model_layout.addWidget(self.model_label)
         model_layout.addWidget(model_button)
         model_layout.addWidget(self.checkbox_pro_idik)
 
+        # Save path
+        save_path_layout = QHBoxLayout()
+        self.save_path_label = QLabel("Aucun fichier sélectionné")
+        save_path_button = QPushButton("Charger un fichier")
+        save_path_button.clicked.connect(self.select_save_path)
+        save_path_layout.addWidget(self.save_path_label)
+        save_path_layout.addWidget(save_path_button)
+
         main_layout.addLayout(mass_layout)
         main_layout.addLayout(model_layout)
+        main_layout.addChildLayout(save_path_layout)
         groupbox.setLayout(main_layout)
         return groupbox
 
     def need_process_idik(self):
         """Active le traitement IK/ID"""
-        self.process_idik = self.checkbox_pro_idik.isChecked()
+        global PROCESS_ID_IK
+        PROCESS_ID_IK = self.checkbox_pro_idik.isChecked()
 
     def upload_file(self):
         """Charge un fichier de modèle"""
@@ -1205,13 +1228,32 @@ class Interface(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(self, "Sélectionner un fichier")
         if file_name:
             try:
+                # Load the model file
                 MODEL_FILE_NAME = file_name
                 MODEL = biorbd.Model(file_name)
                 logging.info(f"Fichier modèle chargé: {file_name}")
                 self.model_label.setText(file_name.split('/')[-1])
+
+                # Allow for ID/IK processing if the model is loaded
+                self.checkbox_pro_idik.setEnabled(True)
+
             except Exception as e:
                 logging.error(f"Erreur lors du chargement du fichier: {str(e)}")
                 QMessageBox.critical(self, "Erreur", f"Impossible de charger le fichier: {str(e)}")
+
+    def select_save_path(self):
+        """Sélectionne le chemin de sauvegarde pour les données"""
+        global SAVE_PATH
+
+        folder_name = QFileDialog.getExistingDirectory(self, "Sélectionner un dossier")
+        if folder_name:
+            try:
+                SAVE_PATH = folder_name
+                logging.info(f"Dossier d'enregistrement sélectionné: {folder_name}")
+                self.save_path_label.setText(folder_name)
+            except Exception as e:
+                logging.error(f"Erreur lors de la sélection du dossier: {str(e)}")
+                QMessageBox.critical(self, "Erreur", f"Impossible de charger le dossier: {str(e)}")
 
     def update_mass(self, mass_value):
         """Met à jour la masse du participant"""
@@ -1311,10 +1353,22 @@ class Interface(QMainWindow):
                     mode_input,
                 )
 
-    @staticmethod
-    def activate_stimulator():
+    def activate_stimulator(self):
         global ACTIVATE_STIMULATOR
-        ACTIVATE_STIMULATOR=True
+        ACTIVATE_STIMULATOR = True
+
+        # Enable stimulation controls
+        self.manual_mode_button.setEnabled(True)
+        self.update_button.setEnabled(True)
+        self.bayesian_mode_button.setEnabled(True)
+        self.ilc_mode_button.setEnabled(False)  # TODO: Charbie -> Implement ILC, for now always disabled
+
+        # Channel Bounds Section
+        for i in range(1, 9):
+            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
+
 
     def old_activate_stimulator(self):
         self.channels = []
@@ -1341,27 +1395,56 @@ class Interface(QMainWindow):
             self.stimulator.update_stimulation()
 
     def manual_optim_chosen(self):
+        global RUN_OPTIMISATION
+        RUN_OPTIMISATION = False
+
         self.update_button.setEnabled(True)
         self.start_bayesian_optim_button.setEnabled(False)
         self.stop_bayesian_optim_button.setEnabled(False)
         # TODO: Charbie -> add the ICL buttons
 
+        # Channel Bounds Section
+        for i in range(1, 9):
+            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
+
+
     def bayesian_optim_chosen(self):
+        global RUN_OPTIMISATION
+        RUN_OPTIMISATION = True
+
         self.update_button.setEnabled(False)
         self.start_bayesian_optim_button.setEnabled(True)
         self.stop_bayesian_optim_button.setEnabled(True)
         # TODO: Charbie -> add the ICL buttons
 
+        # Channel Bounds Section
+        for i in range(1, 9):
+            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
+
+
     def ilc_optim_chosen(self):
+        global RUN_OPTIMISATION
+        RUN_OPTIMISATION = False
+
         self.update_button.setEnabled(False)
         self.start_bayesian_optim_button.setEnabled(False)
         self.stop_bayesian_optim_button.setEnabled(False)
         # TODO: Charbie -> add the ICL buttons
 
+        # Channel Bounds Section
+        for i in range(1, 9):
+            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
+
 
     def start_stimulation(self):
         global START_STIMULATION
-        START_STIMULATION=True
+        START_STIMULATION = True
 
         if self.is_manual_mode:
             self.update_button.setEnabled(True)
@@ -1372,7 +1455,12 @@ class Interface(QMainWindow):
 
     def stop_stimulator(self):
         global STOP_STIMULATOR
-        STOP_STIMULATOR=True
+        STOP_STIMULATOR = True
+
+    def set_discomfort(self, value):
+        global DISCOMFORT
+        DISCOMFORT = value
+
 
     def create_stimulation_controls(self):
         """Crée les contrôles de stimulation"""
@@ -1404,6 +1492,8 @@ class Interface(QMainWindow):
 
     def create_optimization_mode(self):
         """Créer les boutons pour choisir si la stimulation est en mode manuel ou optimisé."""
+        global DISCOMFORT
+
         groupbox = QGroupBox("Stimulation Parameter Mode:")
         layout = QGridLayout()
 
@@ -1411,16 +1501,14 @@ class Interface(QMainWindow):
         self.manual_mode_button = QRadioButton("Manual", self)
         self.manual_mode_button.setChecked(True)
         self.manual_mode_button.toggled.connect(self.manual_optim_chosen)
-        self.update_button = QPushButton("Actualiser Paramètre Stim")
-        self.update_button.setEnabled(False)
-        self.update_button.clicked.connect(self.update_stimulation)
+        self.manual_mode_button.setEnabled(False)
 
         layout.addWidget(self.manual_mode_button, 0, 0, 1, 1)
-        layout.addWidget(self.update_button, 0, 1, 1, 1)
 
         # Bayesian Optimization Mode
         self.bayesian_mode_button = QRadioButton("Bayesian Optimization", self)
         self.bayesian_mode_button.toggled.connect(self.bayesian_optim_chosen)
+        self.bayesian_mode_button.setEnabled(False)
         self.start_bayesian_optim_button = QPushButton("Start Optim")
         self.start_bayesian_optim_button.setEnabled(False)
         self.start_bayesian_optim_button.clicked.connect(self.start_bayesian_optimization)
@@ -1444,33 +1532,42 @@ class Interface(QMainWindow):
             channel_label = QLabel(f"Canal {i} :")
             layout.addWidget(channel_label, 3, i - 1)
 
-            for parameter_name in DEFAULT_BOUNDS.keys():
+            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
                 if parameter_name not in self.channel_bounds_inputs:
                     self.channel_bounds_inputs[parameter_name] = {}
 
                 channel_min_bound = QSpinBox()
                 channel_min_bound.setRange(DEFAULT_BOUNDS[parameter_name][0], DEFAULT_BOUNDS[parameter_name][1])
                 channel_min_bound.setValue(DEFAULT_BOUNDS[parameter_name][0])
+                channel_min_bound.setEnabled(False)
                 channel_max_bound = QSpinBox()
                 channel_max_bound.setRange(DEFAULT_BOUNDS[parameter_name][0], DEFAULT_BOUNDS[parameter_name][1])
                 channel_max_bound.setValue(DEFAULT_BOUNDS[parameter_name][1])
+                channel_max_bound.setEnabled(False)
 
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name] = [channel_min_bound, channel_max_bound]
-                layout.addWidget(channel_min_bound, 4, i - 1, 1, 1)
-                layout.addWidget(channel_max_bound, 5, i - 1, 1, 1)
+                layout.addWidget(channel_min_bound, 4+2*i_parameter, i - 1, 1, 1)
+                layout.addWidget(channel_max_bound, 5+2*i_parameter, i - 1, 1, 1)
 
-        stable_cycles_label = QLabel(f"There were <b>{self.num_stable_cycles}</b> stable cycles")
-        layout.addWidget(stable_cycles_label, 0, 5)
-        current_cost_label = QLabel(f"The current cost is <b>{self.current_cost}</b>")
-        layout.addWidget(current_cost_label, 1, 5)
+        amplitude_label = QLabel(" mA")
+        layout.addWidget(amplitude_label, 4, i, 1, 1)
+        width_label = QLabel(" µs")
+        layout.addWidget(width_label, 6, i, 1, 1)
+        frequency_label = QLabel(" Hz")
+        layout.addWidget(frequency_label, 8, i, 1, 1)
+
+        # stable_cycles_label = QLabel(f"There were <b>{self.num_stable_cycles}</b> stable cycles")
+        # layout.addWidget(stable_cycles_label, 0, 5)
+        # current_cost_label = QLabel(f"The current cost is <b>{self.current_cost}</b>")
+        # layout.addWidget(current_cost_label, 1, 5)
         discomfort_label = QLabel(f"Discomfort  :")
         layout.addWidget(discomfort_label, 2, 4)
         discomfort_box = QSpinBox()
         discomfort_box.setRange(0, 10)
-        discomfort_box.setValue(self.discomfort)
+        discomfort_box.setValue(DISCOMFORT)
         layout.addWidget(discomfort_box, 2, 5)
         discomfort_button = QPushButton("Set discomfort")
-        discomfort_button.clicked.connect(lambda: setattr(self, "discomfort", discomfort_box.value()))
+        discomfort_button.clicked.connect(lambda: self.set_discomfort(discomfort_box.value()))
         layout.addWidget(discomfort_button, 2, 6)
 
         # Set the groupbox layout
@@ -1526,7 +1623,7 @@ class Interface(QMainWindow):
                 "mode": inputs["mode_input"].currentText(),
             }
 
-        if RedisConnectionManager.r and RedisConnectionManager.redis_connected:
+        if is_redis_connected():
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
                 safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -FRAME_BUFFER_LENGTH, -1)
@@ -1546,7 +1643,7 @@ class Interface(QMainWindow):
         """Arrête l'optimisation Bayésienne."""
         # TODO save the best parameters
         pass
-    
+
     def update_connection_status(self, connected, message):
         """Met à jour le statut de connexion"""
         self.connection_status.setText(f"Statut: {message}")
