@@ -212,6 +212,8 @@ class DataReceiver:
                     # frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
                     self.frame_counter += 1
                     frame_id = f"{time.time()}-{self.frame_counter}"
+                    if self.frame_counter % 1000 == 0:
+                        print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
 
                     # Stocker l'ID dans une liste séparée pour suivre l'ordre
                     safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
@@ -315,7 +317,6 @@ class DataProcessor:
             new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
             if len(new_frame_ids) > 99:
-                print([new_frame_ids[0], len(new_frame_ids), new_frame_ids[-1]])
                 forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
                 mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
@@ -341,16 +342,25 @@ class DataProcessor:
                         cycle_stop_id = str(new_frame_ids[heel_strike_idx[0]])
 
                         # Récupérer les données pour ce cycle uniquement
+                        if self.cycle_start_id not in all_frame_ids:
+                            logging.info(f"Cycle start ID {self.cycle_start_id} not found in all frame IDs. "
+                                         f"Skipping this cycle.")
+                            self.cycle_start_id = None
+                            return
                         cycle_start_idx = all_frame_ids.index(self.cycle_start_id)
                         cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
 
-                        if cycle_stop_idx - cycle_start_idx < 30:
-                            if len(heel_strike_idx) > 1:
-                                cycle_stop_id = str(new_frame_ids[heel_strike_idx[1]])
+                        idx = 0
+                        while cycle_stop_idx - cycle_start_idx < 30:
+                            idx += 1
+                            if len(heel_strike_idx) > idx + 1:
+                                cycle_stop_id = str(new_frame_ids[heel_strike_idx[idx]])
                                 cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
+                                print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
                             else:
                                 logging.info("Cycle trop court, pas de traitement.")
                                 print(heel_strike_idx)
+                                self.cycle_start_id = None
                                 return
 
                         print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
@@ -1787,7 +1797,9 @@ def main():
     redis_manager = RedisConnectionManager()
 
     # Data receiver (goal: interaction with Qualisys)
-    data_receiver = DataReceiver("127.0.0.1", 50000)  # 50000  # 7
+    server_ip = "192.168.0.1"  #   # "192.168.0.1" 127.0.0.1# Adresse IP du serveur
+    server_port = 7  # 7 # 50000 Port à utiliser
+    data_receiver = DataReceiver(server_ip, server_port)
 
     # Data processor (goal: ID, IK)
     data_processor = DataProcessor()
