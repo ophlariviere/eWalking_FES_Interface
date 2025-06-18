@@ -1787,7 +1787,7 @@ def main():
     redis_manager = RedisConnectionManager()
 
     # Data receiver (goal: interaction with Qualisys)
-    data_receiver = DataReceiver("127.0.0.1", 50000)
+    data_receiver = DataReceiver("127.0.0.1", 50000)  # 50000  # 7
 
     # Data processor (goal: ID, IK)
     data_processor = DataProcessor()
