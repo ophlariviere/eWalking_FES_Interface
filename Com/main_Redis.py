@@ -349,21 +349,23 @@ class DataProcessor:
                                 cycle_stop_id = str(new_frame_ids[heel_strike_idx[1]])
                                 cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
                             else:
-                                # logging.info("Cycle trop court, pas de traitement.")
+                                logging.info("Cycle trop court, pas de traitement.")
+                                print(heel_strike_idx)
                                 return
 
-                        print("start : ", cycle_start_idx, " / stop : ", cycle_stop_idx)
+                        print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
+                        print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
                         print("cycle idx : ", self.cycle_idx)
 
-                        mks = mks_all[:, :, cycle_start_idx:cycle_stop_idx]
-                        forces = forces_all[:, :, cycle_start_idx:cycle_stop_idx]
+                        mks = mks_all[:, :, cycle_start_idx:cycle_stop_idx+1]
+                        forces = forces_all[:, :, cycle_start_idx:cycle_stop_idx+1]
 
                         if MODEL is not None:
                             print("Calcul IK/ID...")
 
                             # # Check that all frames have the same markers
                             # mks_names_this_cycle = mks_name[cycle_start_idx]
-                            # for frame in range(cycle_start_idx, cycle_stop_idx):
+                            # for frame in range(cycle_start_idx, cycle_stop_idx+1):
                             #     if mks_name[frame] != mks_names_this_cycle:
                             #         logging.error("Les noms des marqueurs ne correspondent pas pour tous les frames.")
                             #         return
@@ -385,13 +387,13 @@ class DataProcessor:
                             safe_redis_operation(redis_client.ltrim, "qdot",  -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "ddotq",  -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.ltrim, "qddot",  -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
                             safe_redis_operation(redis_client.ltrim, "tau",  -CYCLE_BUFFER_LENGTH, -1)
 
                         self.cycle_start_id = cycle_stop_id
-                        self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx: cycle_stop_idx])
+                        self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx: cycle_stop_idx+1])
                         self.cycle_idx += 1
 
 
