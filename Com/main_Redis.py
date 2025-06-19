@@ -210,10 +210,9 @@ class DataReceiver:
                             forces_frame[i][i2] = mean_val
 
                     # Créer un identifiant unique (timestamp + compteur)
-                    # frame_id = f"{time.time()}-{random.randint(1000, 9999)}"
                     self.frame_counter += 1
                     frame_id = f"{time.time()}-{self.frame_counter}"
-                    if self.frame_counter % 1000 == 0:
+                    if self.frame_counter % 100 == 0:
                         print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
 
                     # Stocker l'ID dans une liste séparée pour suivre l'ordre
@@ -1383,27 +1382,6 @@ class Interface(QMainWindow):
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
 
-
-    def old_activate_stimulator(self):
-        self.channels = []
-        for channel, inputs in self.channel_inputs.items():
-            channel_obj = Channel(
-                no_channel=channel,
-                name=inputs["name_input"].text(),
-                amplitude=inputs["amplitude_input"].value(),
-                pulse_width=inputs["pulse_width_input"].value(),
-                frequency=inputs["frequency_input"].value(),
-                mode=Modes.SINGLE,  # inputs["mode_input"].currentText(),
-                device_type=Device.Rehastimp24,
-            )
-
-            self.channels.append(channel_obj)
-        if self.channels:
-            self.stimulator.init_stimulation(list_channels=self.channels)
-
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(True)
-
     def update_stimulation(self):
         if self.stimulator is not None:
             self.stimulator.update_stimulation()
@@ -1700,20 +1678,18 @@ class Interface(QMainWindow):
                 if data is None:
                     continue
                 if 'force_1' in key:
-                    self.DataToPlot[key] = data[0][2, :]
+                    y_data = data[0][2, :]
                 if 'force_2' in key:
-                    self.DataToPlot[key] = data[1][2, :]
+                    y_data = data[1][2, :]
             else:
                 data_l = None
                 if 'tau' in key:
                     data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
-
                 elif 'q' in key:
                     data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
 
                 if not data_l:
                     continue
-
                 n_frames = len(data_l)
                 n_dof = len(data_l[0])
                 data = np.zeros((n_dof, n_frames))
@@ -1727,12 +1703,19 @@ class Interface(QMainWindow):
                     data = data * 180 / np.pi
 
                 if 'LHip' in key:
-                    self.DataToPlot[key] = data[37, :]
+                    y_data = data[37, :]
                 elif 'LAnkle' in key:
-                    self.DataToPlot[key] = data[40, :]
+                    y_data = data[40, :]
                 elif 'Lknee' in key:
-                    self.DataToPlot[key] = data[43, :]
-        self.update_graphs()
+                    y_data = data[43, :]
+
+            # Actually plot the data
+            x_data = np.linspace(0, len(y_data) - 1, len(y_data)) * 1 / MARKER_FREQUENCY
+            self.graph_axes[key].set_xdata(x_data)
+            self.graph_axes[key].set_ydata(y_data)
+
+        # Draw all the plots now
+        self.canvas.draw()
 
     def create_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
@@ -1759,17 +1742,11 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel('Frame')
                 ax.set_ylabel(key)
-                self.graph_axes[key] = ax
+                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), '-', color='tab::red')[0]
                 subplot_index += 1
-                # Plot the data
-                self.plot_vector_data(ax, key)
 
         # Redessiner le canevas pour afficher les nouvelles données
         self.canvas.draw()
-
-    def plot_vector_data(self, ax, key):
-        data = self.DataToPlot[key]
-        ax.plot(data)
 
     @staticmethod
     def on_data_received():
