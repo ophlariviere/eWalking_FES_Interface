@@ -80,6 +80,7 @@ class StimulationMode(Enum):
     MANUAL = "manual"
     BAYESIAN = "bayesian"
     ILC = "ilc"
+    # TODO: implement ILC based on https://www.sciencedirect.com/science/article/abs/pii/S0967066120300046
 
 
 
@@ -1128,15 +1129,16 @@ class Interface(QMainWindow):
         self.stimulation_mode = StimulationMode.MANUAL
         self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in range(1, 9)}
         self.discomfort = 0
-        self.DataToPlot = self.initialize_data_to_plot()
+        self.which_data_to_plot = {key: False for key in ["force_1", "force_2", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]}
+        self.graph_axes = {}
 
         # Initialize UI components
         self.init_ui()
 
-        # # Timer pour mettre à jour les graphes toutes les secondes
-        # self.graph_update_timer = QTimer(self)
-        # self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
-        # self.graph_update_timer.start(100)
+        # Timer pour mettre à jour les graphes toutes les secondes
+        self.graph_update_timer = QTimer(self)
+        self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
+        self.graph_update_timer.start(100)
 
 
     def closeEvent(self, event):
@@ -1670,25 +1672,15 @@ class Interface(QMainWindow):
             else "color: gray;"
         )
 
-    @staticmethod
-    def initialize_data_to_plot():
-        """Initialise le dictionnaire des données à tracer."""
-        keys = [
-            "force_1", "force_2",
-            "tau_LHip", "tau_LKnee", "tau_LAnkle",
-            "q_LHip", "q_LKnee", "q_LAnkle",
-        ]
-        return {key: {} for key in keys}
-
     def create_analysis_group(self):
         """Créer un groupbox pour la sélection des analyses."""
         groupbox = QGroupBox("Sélections d'Analyse")
         layout = QHBoxLayout()
 
         self.checkboxes_graphs = {}
-        for key in self.DataToPlot.keys():
+        for key in self.which_data_to_plot.keys():
             checkbox = QCheckBox(key, self)
-            checkbox.stateChanged.connect(self.update_graphs)
+            checkbox.stateChanged.connect(self.create_graphs)
             layout.addWidget(checkbox)
             self.checkboxes_graphs[key] = checkbox
 
@@ -1696,8 +1688,12 @@ class Interface(QMainWindow):
         return groupbox
 
     def update_data_and_graphs(self):
-        # Parcours des clés de self.DataToPlot
-        for key in self.DataToPlot.keys():
+        # Parcours des clés de self.which_data_to_plot
+        for key, is_checked in self.which_data_to_plot.items():
+            if not is_checked:
+                # Skip if we do not need to show this type of data
+                continue
+
             if 'force' in key:
                 data = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
                 data = np.array(data).transpose(1, 2, 0)
@@ -1738,13 +1734,13 @@ class Interface(QMainWindow):
                     self.DataToPlot[key] = data[43, :]
         self.update_graphs()
 
-    def update_graphs(self):
+    def create_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
         self.figure.clear()
 
         # Check selected graphs
-        graphs_to_display = {key: checkbox.isChecked() for key, checkbox in self.checkboxes_graphs.items()}
-        count = sum(graphs_to_display.values())
+        self.which_data_to_plot = {key: checkbox.isChecked() for key, checkbox in self.checkboxes_graphs.items()}
+        count = sum(self.which_data_to_plot.values())
 
         if count == 0:
             # Nothing to display
@@ -1757,13 +1753,16 @@ class Interface(QMainWindow):
         subplot_index = 1
 
         # Affichage des graphiques en fonction des cases à cocher
-        for key, is_checked in graphs_to_display.items():
+        for key, is_checked in self.which_data_to_plot.items():
             if is_checked:
                 # Ajouter un sous-graphe pour chaque graphique sélectionné
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
-                if key in self.DataToPlot.keys():
-                    self.plot_vector_data(ax, key)
+                ax.set_xlabel('Frame')
+                ax.set_ylabel(key)
+                self.graph_axes[key] = ax
                 subplot_index += 1
+                # Plot the data
+                self.plot_vector_data(ax, key)
 
         # Redessiner le canevas pour afficher les nouvelles données
         self.canvas.draw()
@@ -1771,8 +1770,6 @@ class Interface(QMainWindow):
     def plot_vector_data(self, ax, key):
         data = self.DataToPlot[key]
         ax.plot(data)
-        ax.set_xlabel('Frame')
-        ax.set_ylabel(key)
 
     @staticmethod
     def on_data_received():
