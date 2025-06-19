@@ -6,15 +6,30 @@ The Redis database contains
 1. Data at each frame (force, mks, mks_names, frame_ids)
 2. Data at each cycle (q, tau, cycle_ids)
 """
+
 import datetime
 import os.path
 import sys
 from enum import Enum
 import logging
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QCheckBox, QPushButton,
-    QWidget, QGroupBox, QLabel, QLineEdit, QSpinBox, QComboBox, QFileDialog,
-    QMessageBox, QStatusBar, QGridLayout, QRadioButton,
+    QApplication,
+    QMainWindow,
+    QVBoxLayout,
+    QHBoxLayout,
+    QCheckBox,
+    QPushButton,
+    QWidget,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QComboBox,
+    QFileDialog,
+    QMessageBox,
+    QStatusBar,
+    QGridLayout,
+    QRadioButton,
 )
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 import redis
@@ -39,15 +54,13 @@ from skopt.space import Real
 
 # Configuration du logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
 )
 
 # Constantes globales
 FRAME_BUFFER_LENGTH = 800
 CYCLE_BUFFER_LENGTH = 100
-REDIS_HOST = 'localhost'
+REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 
 MARKER_FREQUENCY = 100
@@ -81,7 +94,6 @@ class StimulationMode(Enum):
     BAYESIAN = "bayesian"
     ILC = "ilc"
     # TODO: implement ILC based on https://www.sciencedirect.com/science/article/abs/pii/S0967066120300046
-
 
 
 class RedisConnectionManager:
@@ -146,11 +158,11 @@ def safe_redis_operation(operation, *args, **kwargs):
 
 
 def get_new_indices(processed_frame_ids, print_option=False):
-    """ Filtrer pour ne garder que les nouveaux IDs """
+    """Filtrer pour ne garder que les nouveaux IDs"""
     global redis_client
 
     try:
-        frame_ids = [x.decode('utf-8') for x in redis_client.lrange("frame_ids", 0, -1)]
+        frame_ids = [x.decode("utf-8") for x in redis_client.lrange("frame_ids", 0, -1)]
         new_indices = [i for i, frame_id in enumerate(frame_ids) if frame_id not in processed_frame_ids]
         new_frame_ids = [frame_id for frame_id in frame_ids if frame_id not in processed_frame_ids]
         new_frame_ids = np.array(new_frame_ids)
@@ -192,21 +204,21 @@ class DataReceiver:
 
                     """ Data markers """
                     if self.mks_name is None:
-                        self.mks_name = received_data['mks_name']
+                        self.mks_name = received_data["mks_name"]
                         safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
                         safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
 
-                    mks = received_data['mks']
+                    mks = received_data["mks"]
                     nb_markers = len(self.mks_name)
                     markers_frame = np.full((3, nb_markers), np.nan)
                     for i, name in enumerate(self.mks_name):
                         markers_frame[:, i] = mks[i]
 
                     """ Data forces"""
-                    forces_frame = np.full((len(received_data['force']), 9), np.nan)
-                    for i in range(len(received_data['force'])):
-                        for i2 in range(len(received_data['force'][i])):
-                            mean_val = float(np.mean(received_data['force'][i][i2, :]))
+                    forces_frame = np.full((len(received_data["force"]), 9), np.nan)
+                    for i in range(len(received_data["force"])):
+                        for i2 in range(len(received_data["force"][i])):
+                            mean_val = float(np.mean(received_data["force"][i][i2, :]))
                             forces_frame[i][i2] = mean_val
 
                     # Créer un identifiant unique (timestamp + compteur)
@@ -220,9 +232,9 @@ class DataReceiver:
                     safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
 
                     safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "force",  -FRAME_BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
                     safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "mks",  -FRAME_BUFFER_LENGTH, -1)
+                    safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
                     self.data_received = "Data received successfully"
 
                     # time.sleep(1/self.read_frequency)
@@ -248,14 +260,23 @@ class DataProcessor:
         super().__init__()
         self.running = True
         self.dof_corr = {
-            "LHip": (36, 37, 38), "LKnee": (39, 40, 41), "LAnkle": (42, 43, 44),
-            "RHip": (27, 28, 29), "RKnee": (30, 31, 32), "RAnkle": (33, 34, 35),
-            "LShoulder": (18, 19, 20), "LElbow": (21, 22, 23), "LWrist": (24, 25, 26),
-            "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
-            "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
+            "LHip": (36, 37, 38),
+            "LKnee": (39, 40, 41),
+            "LAnkle": (42, 43, 44),
+            "RHip": (27, 28, 29),
+            "RKnee": (30, 31, 32),
+            "RAnkle": (33, 34, 35),
+            "LShoulder": (18, 19, 20),
+            "LElbow": (21, 22, 23),
+            "LWrist": (24, 25, 26),
+            "RShoulder": (9, 10, 11),
+            "RElbow": (12, 13, 14),
+            "RWrist": (15, 16, 17),
+            "Thorax": (6, 7, 8),
+            "Pelvis": (3, 4, 5),
         }
-        self.processed_frame_ids = deque(maxlen=2*FRAME_BUFFER_LENGTH)
-        self.processed_cycles = deque(maxlen=2*CYCLE_BUFFER_LENGTH)
+        self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
+        self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
         self.cycle_counter = 0  # For the detection of cycles
         self.cycle_idx = 0  # For the treatment of the cycles
@@ -279,9 +300,9 @@ class DataProcessor:
         # print("Identifying cycle start...")
 
         force_filtered = self.data_filter(forces_all[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
-        current_cycle_idx = np.ones((forces_all[0].shape[1], )) * self.cycle_counter
+        current_cycle_idx = np.ones((forces_all[0].shape[1],)) * self.cycle_counter
 
-        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD*2 * MASS
+        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * 2 * MASS
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
         # toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
@@ -299,16 +320,15 @@ class DataProcessor:
         for i_cycle in range(heel_strike_idx.shape[0]):
             self.cycle_counter += 1
             if heel_strike_idx.shape[0] > i_cycle + 1:
-                current_cycle_idx[heel_strike_idx[i_cycle]:heel_strike_idx[i_cycle+1]] = self.cycle_counter
+                current_cycle_idx[heel_strike_idx[i_cycle] : heel_strike_idx[i_cycle + 1]] = self.cycle_counter
             else:
-                current_cycle_idx[heel_strike_idx[i_cycle]:] = self.cycle_counter
+                current_cycle_idx[heel_strike_idx[i_cycle] :] = self.cycle_counter
 
             # # TODO: remove ?
             # safe_redis_operation(redis_client.rpush, "current_cycle_idx", json.dumps(current_cycle_idx.tolist()))
             # safe_redis_operation(redis_client.ltrim, "current_cycle_idx", -FRAME_BUFFER_LENGTH, -1)
 
         return heel_strike_idx
-
 
     def process(self):
         try:
@@ -317,11 +337,11 @@ class DataProcessor:
             new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
             if len(new_frame_ids) > 99:
-                forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+                forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
-                mks_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks", 0, -1)]
+                mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
-                mks_name = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("mks_name", 0, -1)]
+                mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)]
 
                 if mks_all.shape[2] != len(all_frame_ids) or forces_all.shape[2] != len(all_frame_ids):
                     # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
@@ -337,14 +357,16 @@ class DataProcessor:
                         # We skip on purpose everything before the first heel strike is detected
                         self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
                         print("initialization : start id = ", self.cycle_start_id)
-                        self.processed_frame_ids.extend(new_frame_ids[:heel_strike_idx[0]])
+                        self.processed_frame_ids.extend(new_frame_ids[: heel_strike_idx[0]])
                     else:
                         cycle_stop_id = str(new_frame_ids[heel_strike_idx[0]])
 
                         # Récupérer les données pour ce cycle uniquement
                         if self.cycle_start_id not in all_frame_ids:
-                            logging.info(f"Cycle start ID {self.cycle_start_id} not found in all frame IDs. "
-                                         f"Skipping this cycle.")
+                            logging.info(
+                                f"Cycle start ID {self.cycle_start_id} not found in all frame IDs. "
+                                f"Skipping this cycle."
+                            )
                             self.cycle_start_id = None
                             return
                         cycle_start_idx = all_frame_ids.index(self.cycle_start_id)
@@ -367,8 +389,8 @@ class DataProcessor:
                         print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
                         print("cycle idx : ", self.cycle_idx)
 
-                        mks = mks_all[:, :, cycle_start_idx:cycle_stop_idx+1]
-                        forces = forces_all[:, :, cycle_start_idx:cycle_stop_idx+1]
+                        mks = mks_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
+                        forces = forces_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
 
                         if MODEL is not None:
                             print("Calcul IK/ID...")
@@ -391,21 +413,20 @@ class DataProcessor:
                             safe_redis_operation(redis_client.ltrim, "cycle_idx", -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "q", json.dumps(q.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "q",  -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.ltrim, "q", -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "qdot",  -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.ltrim, "qdot", -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "qddot",  -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.ltrim, "qddot", -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "tau",  -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.ltrim, "tau", -CYCLE_BUFFER_LENGTH, -1)
 
                         self.cycle_start_id = cycle_stop_id
-                        self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx: cycle_stop_idx+1])
+                        self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx : cycle_stop_idx + 1])
                         self.cycle_idx += 1
-
 
         except Exception as e:
             logging.error(f"Erreur lors du traitement des données: {e}")
@@ -437,7 +458,7 @@ class DataProcessor:
         try:
             num_contacts = len(force)
             num_frames = force[0].shape[1]
-            platform_origin = [[0.78485, 0.7825, 0.], [0.78485, 0.2385, 0.]]
+            platform_origin = [[0.78485, 0.7825, 0.0], [0.78485, 0.2385, 0.0]]
             force_filtered = np.zeros((num_contacts, 3, num_frames))
             moment_filtered = np.zeros((num_contacts, 3, num_frames))
             tau_data = np.zeros((model.nbQ(), num_frames))
@@ -452,7 +473,7 @@ class DataProcessor:
                     fz = force_filtered[contact_idx, 2, i]
                     if fz > 30:
                         force_vec = force_filtered[contact_idx, :, i]
-                        moment_vec = moment_filtered[contact_idx, :, i]/1000
+                        moment_vec = moment_filtered[contact_idx, :, i] / 1000
                         spatial_vector = np.concatenate((moment_vec, force_vec))
                         point_app = platform_origin[contact_idx]
                         segment_name = "LFoot" if contact_idx == 0 else "RFoot"
@@ -469,7 +490,7 @@ class DataProcessor:
     def data_filter(self, data, order, sampling_rate, cutoff_freq):
         nyquist = 0.5 * sampling_rate
         normal_cutoff = cutoff_freq / nyquist
-        b, a = butter(order, normal_cutoff, btype='low')
+        b, a = butter(order, normal_cutoff, btype="low")
 
         data = np.asarray(data)
         filtered_data = np.empty_like(data)
@@ -510,11 +531,20 @@ class BayesianOptimizer:
         super().__init__()
         self.running = True
         self.dof_corr = {
-            "LHip": (36, 37, 38), "LKnee": (39, 40, 41), "LAnkle": (42, 43, 44),
-            "RHip": (27, 28, 29), "RKnee": (30, 31, 32), "RAnkle": (33, 34, 35),
-            "LShoulder": (18, 19, 20), "LElbow": (21, 22, 23), "LWrist": (24, 25, 26),
-            "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
-            "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
+            "LHip": (36, 37, 38),
+            "LKnee": (39, 40, 41),
+            "LAnkle": (42, 43, 44),
+            "RHip": (27, 28, 29),
+            "RKnee": (30, 31, 32),
+            "RAnkle": (33, 34, 35),
+            "LShoulder": (18, 19, 20),
+            "LElbow": (21, 22, 23),
+            "LWrist": (24, 25, 26),
+            "RShoulder": (9, 10, 11),
+            "RElbow": (12, 13, 14),
+            "RWrist": (15, 16, 17),
+            "Thorax": (6, 7, 8),
+            "Pelvis": (3, 4, 5),
         }
         # self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         # self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
@@ -539,7 +569,6 @@ class BayesianOptimizer:
         self.weight_angular_momentum = 1
         self.weight_enegy = 1
         self.weight_ankle_power = -1
-
 
     def start_optimizing(self):
         self.running = True
@@ -577,7 +606,6 @@ class BayesianOptimizer:
     def stop(self):
         self.running = False
         self.wait()
-
 
     def compute_mean_cycle(self, cycles):
 
@@ -627,7 +655,6 @@ class BayesianOptimizer:
         L_intensity = params[4]
         L_width = params[5]
 
-
         stimulator_parameters = {}
         stimulator_parameters["0"] = {
             "name": f"Canal 0",
@@ -647,24 +674,27 @@ class BayesianOptimizer:
         if is_redis_connected():
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
-                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -FRAME_BUFFER_LENGTH, -1)
+                safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
                 logging.info(f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {params}")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
-
 
     def get_cycle_data(self):
 
         no_new_data = True
         while no_new_data:
-            cycle_indices = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("cycle_idx", 0, -1)]
-            q_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
-            qdot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qdot", 0, -1)]
-            qddot_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("qddot", 0, -1)]
-            tau_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
+            cycle_indices = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("cycle_idx", 0, -1)]
+            q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
+            qdot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qdot", 0, -1)]
+            qddot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qddot", 0, -1)]
+            tau_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
 
-            if len(q_all) != len(cycle_indices) or len(qdot_all) != len(cycle_indices) or len(qddot_all) != len(
-                    cycle_indices) or len(tau_all) != len(cycle_indices):
+            if (
+                len(q_all) != len(cycle_indices)
+                or len(qdot_all) != len(cycle_indices)
+                or len(qddot_all) != len(cycle_indices)
+                or len(tau_all) != len(cycle_indices)
+            ):
                 # We are in a weird state, it is better to wait for the next loop
                 continue
 
@@ -684,7 +714,6 @@ class BayesianOptimizer:
                 no_new_data = False
 
         return q, qdot, qddot, tau
-
 
     def make_an_iteration(self, params):
         global START_STIMULATION, STOP_STIMULATOR
@@ -817,7 +846,6 @@ class BayesianOptimizer:
         sum_ankles = np.sum(np.abs(tau[ankle_index, :] * qdot[ankle_index, :]), axis=0)
         return np.trapezoid(sum_ankles, x=time_vector)
 
-
     def objective(self, q, qdot, qddot, tau, R_intensity, L_intensity):
         global MODEL
 
@@ -831,10 +859,10 @@ class BayesianOptimizer:
         power_ankle = self.compute_ankle_power(qdot, tau, time_vector)
 
         return (
-                self.weight_comddot * comddot
-                + self.weight_angular_momentum * angular_momentum
-                + self.weight_enegy * energy_human
-                + self.weight_ankle_power * power_ankle
+            self.weight_comddot * comddot
+            + self.weight_angular_momentum * angular_momentum
+            + self.weight_enegy * energy_human
+            + self.weight_ankle_power * power_ankle
         )
 
     def save_optimal_bayesian_parameters(self, result):
@@ -907,7 +935,6 @@ class BayesianOptimizer:
         plt.show()
 
 
-
 class StimulationProcessor:
 
     def __init__(self):
@@ -919,7 +946,7 @@ class StimulationProcessor:
         self.sendStim = {1: False, 2: False}
         self.last_foot_stim = None
         self.last_channels = []
-        self.processed_frame_ids = deque(maxlen=2*FRAME_BUFFER_LENGTH)
+        self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         self.data_received = "Not initialized"
 
     def start_processing(self):
@@ -952,7 +979,7 @@ class StimulationProcessor:
             new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
             if len(new_indices) > 0:
-                forces_all = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+                forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
 
                 if forces_all.shape[2] != len(all_frame_ids):
@@ -991,21 +1018,23 @@ class StimulationProcessor:
             force_ap_last = data_force_ap[-1]
             # force_ap_previous = data_force_ap[-2]
             force_vert_last = data_force_v[-1]
-            deri = data_force_ap[1:]-data_force_ap[0:-1]  # last-previous
+            deri = data_force_ap[1:] - data_force_ap[0:-1]  # last-previous
 
             if force_vert_last > 0.7 * subject_mass and np.any(last_second_force_vert > 50):
-                if (force_ap_last < 0.1 * subject_mass
-                        and np.any(deri < 0)  # force_ap_previous > force_ap_last
-                        and not self.sendStim[foot_num]
-                        and self.last_foot_stim is not foot_num):
+                if (
+                    force_ap_last < 0.1 * subject_mass
+                    and np.any(deri < 0)  # force_ap_previous > force_ap_last
+                    and not self.sendStim[foot_num]
+                    and self.last_foot_stim is not foot_num
+                ):
                     info = "StartStim"
                     self.sendStim[foot_num] = True
                     self.last_foot_stim = foot_num
 
-            if ((force_vert_last < FORCE_MIN_THRESHOLD * subject_mass
-                 or (np.any(deri.any > 0)  # force_ap_previous < force_ap_last
-                     and force_ap_last > -0.01 * subject_mass))
-                    and self.sendStim[foot_num]):
+            if (
+                force_vert_last < FORCE_MIN_THRESHOLD * subject_mass
+                or (np.any(deri.any > 0) and force_ap_last > -0.01 * subject_mass)  # force_ap_previous < force_ap_last
+            ) and self.sendStim[foot_num]:
                 info = "StopStim"
                 self.sendStim[foot_num] = False
 
@@ -1128,7 +1157,10 @@ class Interface(QMainWindow):
         self.stimulation_mode = StimulationMode.MANUAL
         self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in range(1, 9)}
         self.discomfort = 0
-        self.which_data_to_plot = {key: False for key in ["force_1", "force_2", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]}
+        self.which_data_to_plot = {
+            key: False
+            for key in ["force_1", "force_2", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
+        }
         self.graph_axes = {}
 
         # Initialize UI components
@@ -1138,7 +1170,6 @@ class Interface(QMainWindow):
         self.graph_update_timer = QTimer(self)
         self.graph_update_timer.timeout.connect(self.update_data_and_graphs)
         self.graph_update_timer.start(100)
-
 
     def closeEvent(self, event):
         """Gère la fermeture de l'application"""
@@ -1245,7 +1276,7 @@ class Interface(QMainWindow):
                 MODEL_FILE_NAME = file_name
                 MODEL = biorbd.Model(file_name)
                 logging.info(f"Fichier modèle chargé: {file_name}")
-                self.model_label.setText(file_name.split('/')[-1])
+                self.model_label.setText(file_name.split("/")[-1])
 
                 # Allow for ID/IK processing if the model is loaded
                 self.checkbox_pro_idik.setEnabled(True)
@@ -1401,7 +1432,6 @@ class Interface(QMainWindow):
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
 
-
     def bayesian_optim_chosen(self):
         global RUN_OPTIMISATION
         RUN_OPTIMISATION = True
@@ -1416,7 +1446,6 @@ class Interface(QMainWindow):
             for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
-
 
     def ilc_optim_chosen(self):
         global RUN_OPTIMISATION
@@ -1433,7 +1462,6 @@ class Interface(QMainWindow):
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
 
-
     def start_stimulation(self):
         global START_STIMULATION
         START_STIMULATION = True
@@ -1444,7 +1472,6 @@ class Interface(QMainWindow):
             self.start_bayesian_optim_button.setEnabled(True)
             self.stop_bayesian_optim_button.setEnabled(True)
 
-
     def stop_stimulator(self):
         global STOP_STIMULATOR
         STOP_STIMULATOR = True
@@ -1452,7 +1479,6 @@ class Interface(QMainWindow):
     def set_discomfort(self, value):
         global DISCOMFORT
         DISCOMFORT = value
-
 
     def create_stimulation_controls(self):
         """Crée les contrôles de stimulation"""
@@ -1538,8 +1564,8 @@ class Interface(QMainWindow):
                 channel_max_bound.setEnabled(False)
 
                 self.channel_bounds_inputs[f"Canal {i}"][parameter_name] = [channel_min_bound, channel_max_bound]
-                layout.addWidget(channel_min_bound, 4+2*i_parameter, i - 1, 1, 1)
-                layout.addWidget(channel_max_bound, 5+2*i_parameter, i - 1, 1, 1)
+                layout.addWidget(channel_min_bound, 4 + 2 * i_parameter, i - 1, 1, 1)
+                layout.addWidget(channel_max_bound, 5 + 2 * i_parameter, i - 1, 1, 1)
 
         amplitude_label = QLabel(" mA")
         layout.addWidget(amplitude_label, 4, i, 1, 1)
@@ -1618,7 +1644,7 @@ class Interface(QMainWindow):
         if is_redis_connected():
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
-                safe_redis_operation(redis_client.ltrim, "stimulation_parameters",  -FRAME_BUFFER_LENGTH, -1)
+                safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
                 logging.info("Paramètres de stimulation mis à jour")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
@@ -1645,9 +1671,9 @@ class Interface(QMainWindow):
         """Met à jour le statut de stimulation"""
         self.stimulation_status.setText(f"Stimulation: {message}")
         self.stimulation_status.setStyleSheet(
-            "color: green;" if "démarrée" in message.lower() or "active" in message.lower()
-            else "color: red;" if "arrêt" in message.lower() or "erreur" in message.lower()
-            else "color: gray;"
+            "color: green;"
+            if "démarrée" in message.lower() or "active" in message.lower()
+            else "color: red;" if "arrêt" in message.lower() or "erreur" in message.lower() else "color: gray;"
         )
 
     def create_analysis_group(self):
@@ -1672,21 +1698,21 @@ class Interface(QMainWindow):
                 # Skip if we do not need to show this type of data
                 continue
 
-            if 'force' in key:
-                data = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("force", 0, -1)]
+            if "force" in key:
+                data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 data = np.array(data).transpose(1, 2, 0)
                 if data is None:
                     continue
-                if 'force_1' in key:
+                if "force_1" in key:
                     y_data = data[0][2, :]
-                if 'force_2' in key:
+                if "force_2" in key:
                     y_data = data[1][2, :]
             else:
                 data_l = None
-                if 'tau' in key:
-                    data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("tau", 0, -1)]
-                elif 'q' in key:
-                    data_l = [json.loads(x.decode('utf-8')) for x in redis_client.lrange("q", 0, -1)]
+                if "tau" in key:
+                    data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+                elif "q" in key:
+                    data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
 
                 if not data_l:
                     continue
@@ -1699,14 +1725,14 @@ class Interface(QMainWindow):
                 if data is None:
                     continue
 
-                if 'q' in key:
+                if "q" in key:
                     data = data * 180 / np.pi
 
-                if 'LHip' in key:
+                if "LHip" in key:
                     y_data = data[37, :]
-                elif 'LAnkle' in key:
+                elif "LAnkle" in key:
                     y_data = data[40, :]
-                elif 'Lknee' in key:
+                elif "Lknee" in key:
                     y_data = data[43, :]
 
             # Actually plot the data
@@ -1740,9 +1766,9 @@ class Interface(QMainWindow):
             if is_checked:
                 # Ajouter un sous-graphe pour chaque graphique sélectionné
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
-                ax.set_xlabel('Frame')
+                ax.set_xlabel("Frame")
                 ax.set_ylabel(key)
-                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), '-', color='tab::red')[0]
+                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab::red")[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données

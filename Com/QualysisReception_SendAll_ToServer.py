@@ -131,13 +131,11 @@ def organize_force_data(forces_data):
     all_forces_data = np.concatenate(collected_data, axis=0)
     return all_forces_data
 
+
 def organize_force_data2(force_data):
     all_data = []
     for plate, forces in force_data:
-        plate_data = [
-            [f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a]
-            for f in forces
-        ]
+        plate_data = [[f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a] for f in forces]
         # Transpose pour avoir (9, nb_frames)
         all_data.append(np.array(plate_data).T)
     return np.array(all_data)  # shape = (2, 9, nb_frames)

@@ -2,11 +2,21 @@ import sys
 import json
 import csv
 import datetime
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog
+from PyQt5.QtWidgets import (
+    QApplication,
+    QWidget,
+    QPushButton,
+    QLabel,
+    QVBoxLayout,
+    QHBoxLayout,
+    QMessageBox,
+    QFileDialog,
+)
 from PyQt5.QtGui import QPainter, QPen, QColor
 from PyQt5.QtCore import Qt, QTimer
 
 CONFIG_FILE = "config.json"  # Fichier pour stocker les dimensions sauvegardées
+
 
 class TreadmillInterface(QWidget):
     def __init__(self):
@@ -44,12 +54,14 @@ class TreadmillInterface(QWidget):
         self.cop_x_label = QLabel("COP X : 0.00 m")
         self.cop_x_label.setAlignment(Qt.AlignCenter)
         self.cop_x_label.setStyleSheet(
-            "font-size: 16px; background-color: lightyellow; border-radius: 5px; padding: 5px;")
+            "font-size: 16px; background-color: lightyellow; border-radius: 5px; padding: 5px;"
+        )
 
         self.cop_y_label = QLabel("COP Y : 0.00 m")
         self.cop_y_label.setAlignment(Qt.AlignCenter)
         self.cop_y_label.setStyleSheet(
-            "font-size: 16px; background-color: lightyellow; border-radius: 5px; padding: 5px;")
+            "font-size: 16px; background-color: lightyellow; border-radius: 5px; padding: 5px;"
+        )
 
         # **Disposition des widgets avec des layouts**
         layout = QVBoxLayout()
@@ -187,7 +199,7 @@ class TreadmillInterface(QWidget):
             "window_size": [self.width(), self.height()],  # Taille actuelle de la fenêtre
             "record_button": [self.record_button.x(), self.record_button.y()],
             "start_button": [self.start_button.x(), self.start_button.y()],
-            "stop_button": [self.stop_button.x(), self.stop_button.y()]
+            "stop_button": [self.stop_button.x(), self.stop_button.y()],
         }
 
         with open(CONFIG_FILE, "w") as file:
@@ -197,9 +209,11 @@ class TreadmillInterface(QWidget):
         """Restaure les positions des boutons si une configuration a été trouvée."""
         if hasattr(self, "button_positions") and self.button_positions:
             for button_name in ["record_button", "start_button", "stop_button"]:
-                if button_name in self.button_positions and isinstance(self.button_positions[button_name],
-                                                                       list) and len(
-                        self.button_positions[button_name]) == 2:
+                if (
+                    button_name in self.button_positions
+                    and isinstance(self.button_positions[button_name], list)
+                    and len(self.button_positions[button_name]) == 2
+                ):
                     getattr(self, button_name).move(*self.button_positions[button_name])
 
     def toggle_recording(self):
@@ -234,8 +248,10 @@ class TreadmillInterface(QWidget):
 
             # Confirmation visuelle avec bouton "Record" en vert 3 sec
             self.record_button.setStyleSheet("background-color: green; font-size: 14px; padding: 5px;")
-            QTimer.singleShot(3000, lambda: self.record_button.setStyleSheet(
-                "background-color: lightgray; font-size: 14px; padding: 5px;"))
+            QTimer.singleShot(
+                3000,
+                lambda: self.record_button.setStyleSheet("background-color: lightgray; font-size: 14px; padding: 5px;"),
+            )
 
     def resizeEvent(self, event):
         """Met à jour automatiquement la taille de la fenêtre dans config.json lorsqu'on la redimensionne."""

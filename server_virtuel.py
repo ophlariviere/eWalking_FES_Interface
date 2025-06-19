@@ -11,9 +11,18 @@ def detect_start(previous_f_z, current_f_z, threshold=30):
 
 
 class RealTimeDataProcessor:
-    def __init__(self, server_ip="127.0.0.1", port=50000, data_path="example\\walkAll_LAO01_Cond10.bio",
-                 model_path="example\\LAO.bioMod",
-                 threshold=30, system_rate=100, device_rate=2000, nb_markers=49, nb_seconds=60):
+    def __init__(
+        self,
+        server_ip="127.0.0.1",
+        port=50000,
+        data_path="example\\walkAll_LAO01_Cond10.bio",
+        model_path="example\\LAO.bioMod",
+        threshold=30,
+        system_rate=100,
+        device_rate=2000,
+        nb_markers=49,
+        nb_seconds=60,
+    ):
         # Initialisation du serveur
         self.server = Server(server_ip, port)
         self.server.start()
@@ -42,7 +51,7 @@ class RealTimeDataProcessor:
     def load_marker_names(self):
         # Chargement des noms des marqueurs à partir du fichier
         tmp = load("example\\walkAll_LAO01_Cond10.bio")
-        return tmp['markers_names'].data[0:self.nb_markers].tolist()
+        return tmp["markers_names"].data[0 : self.nb_markers].tolist()
 
     def setup_interface(self):
         # Configuration du jeu de marqueurs
@@ -73,13 +82,13 @@ class RealTimeDataProcessor:
         try:
             while True:
                 tic = time.perf_counter()
-                dataforce_ok =[[],[]]
+                dataforce_ok = [[], []]
                 dataforce = self.interface.get_device_data(device_name="Treadmill")
-                dataforce_ok[0] = dataforce[0:9 , :]
+                dataforce_ok[0] = dataforce[0:9, :]
                 dataforce_ok[1] = dataforce[9:, :]
                 mark_tmp, _ = self.interface.get_marker_set_data()
-                marker = np.transpose(mark_tmp,(1,0,2))
-                marker=np.squeeze(marker, axis=-1)
+                marker = np.transpose(mark_tmp, (1, 0, 2))
+                marker = np.squeeze(marker, axis=-1)
                 # Calcul de la force verticale moyenne actuelle
                 current_fz = np.mean(dataforce[2])
 
@@ -90,11 +99,7 @@ class RealTimeDataProcessor:
                 elif self.sending_started:
                     connection, message = self.server.client_listening()  # Non-bloquant
                     if connection:
-                        dataAll = {
-                            "force": dataforce_ok,
-                            "mks": marker,
-                            "mks_name": self.mks_name
-                        }
+                        dataAll = {"force": dataforce_ok, "mks": marker, "mks_name": self.mks_name}
                         self.server.send_data(dataAll, connection, message)
         except KeyboardInterrupt:
             print("Arrêt manuel du programme.")

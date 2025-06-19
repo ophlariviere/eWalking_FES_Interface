@@ -118,7 +118,7 @@ class MyInterface(GenericInterface):
         for d, device in enumerate(devices):
             if self.offline_data:
                 device.new_data = self.offline_data[self.device_data_key[d]][
-                    : device.nb_channels, self.c: self.c + device.sample
+                    : device.nb_channels, self.c : self.c + device.sample
                 ]
                 if abs(self.c + device.sample - self.offline_data[self.device_data_key[d]].shape[1]) > device.sample:
                     self.c = self.c + device.sample
@@ -161,7 +161,7 @@ class MyInterface(GenericInterface):
                 if self.offline_data:
                     marker.new_data = (
                         self.offline_data[self.marker_data_key[m]][
-                            :, : marker.nb_channels, self.d: self.d + marker.sample
+                            :, : marker.nb_channels, self.d : self.d + marker.sample
                         ]
                         * coef
                     )
@@ -210,7 +210,6 @@ class MyInterface(GenericInterface):
             return kinematics[0], kinematics[1], marker_data
         else:
             return kinematics[0], kinematics[1]
-
 
 
 if __name__ == "__main__":

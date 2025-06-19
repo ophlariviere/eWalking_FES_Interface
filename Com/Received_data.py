@@ -31,9 +31,7 @@ class DataReceiver(QObject):
             for _ in range(3):  # Multiple attempts
                 try:
                     # Attempt to receive data from the server
-                    received_data = self.tcp_client.get_data_from_server(
-                        command=["footswitch_data"]
-                    )
+                    received_data = self.tcp_client.get_data_from_server(command=["footswitch_data"])
 
                     # Stim gestion
                     if received_data["footswitch_data"]:  # Ensure we have valid data before proceeding
@@ -59,23 +57,26 @@ class DataReceiver(QObject):
                                 # Gestion de la stimulation en fonction des états détectés
                                 self.manage_stimulation(info_feet)
 
-                    '''if received_data["mks"] and self.visualization_widget.doprocessIK:
+                    """if received_data["mks"] and self.visualization_widget.doprocessIK:
                         # TODO add cycle cut and process IK
-                        print("todo")'''
+                        print("todo")"""
                 except Exception as e:
                     logging.error(f"Erreur lors de la réception des données: {e}")
                     time.sleep(0.005)  # Optionally wait before retrying
 
-
     def detect_phase_emg(self, data_heel, data_toe, foot_num):
         info = "nothing"
-        data_heel=data_heel-np.mean(data_heel)
+        data_heel = data_heel - np.mean(data_heel)
         data_toe = data_toe - np.mean(data_toe)
-        if np.mean(np.array(data_heel[:]) ** 2) > 300 and np.mean(np.array(data_toe[:]) ** 2) < 200 and not self.sendStim[foot_num]:
+        if (
+            np.mean(np.array(data_heel[:]) ** 2) > 300
+            and np.mean(np.array(data_toe[:]) ** 2) < 200
+            and not self.sendStim[foot_num]
+        ):
             info = "StartStim"
             self.sendStim[foot_num] = True
         data_toe = data_toe - np.mean(data_toe)
-        if np.mean(np.array(data_toe[:]) ** 2) > 300  and self.sendStim[foot_num] is True:
+        if np.mean(np.array(data_toe[:]) ** 2) > 300 and self.sendStim[foot_num] is True:
             info = "StopStim"
             self.sendStim[foot_num] = False
         return info

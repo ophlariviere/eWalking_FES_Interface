@@ -7,11 +7,20 @@ class DataProcessor:
     def __init__(self):
         self.cycle_num = 0
         self.dof_corr = {
-            "LHip": (36, 37, 38), "LKnee": (39, 40, 41), "LAnkle": (42, 43, 44),
-            "RHip": (27, 28, 29), "RKnee": (30, 31, 32), "RAnkle": (33, 34, 35),
-            "LShoulder": (18, 19, 20), "LElbow": (21, 22, 23), "LWrist": (24, 25, 26),
-            "RShoulder": (9, 10, 11), "RElbow": (12, 13, 14), "RWrist": (15, 16, 17),
-            "Thorax": (6, 7, 8), "Pelvis": (3, 4, 5)
+            "LHip": (36, 37, 38),
+            "LKnee": (39, 40, 41),
+            "LAnkle": (42, 43, 44),
+            "RHip": (27, 28, 29),
+            "RKnee": (30, 31, 32),
+            "RAnkle": (33, 34, 35),
+            "LShoulder": (18, 19, 20),
+            "LElbow": (21, 22, 23),
+            "LWrist": (24, 25, 26),
+            "RShoulder": (9, 10, 11),
+            "RElbow": (12, 13, 14),
+            "RWrist": (15, 16, 17),
+            "Thorax": (6, 7, 8),
+            "Pelvis": (3, 4, 5),
         }
 
     def calculate_kinematic_dynamic(self, model, force, mks):
@@ -89,19 +98,19 @@ class DataProcessor:
                     if gap == 0:
                         continue
                     elif gap <= max_interp_gap:
-                        filled[m, d, start + 1:end] = np.linspace(signal[start], signal[end], gap + 2)[1:-1]
+                        filled[m, d, start + 1 : end] = np.linspace(signal[start], signal[end], gap + 2)[1:-1]
                     else:
-                        filled[m, d, start + 1:end] = signal[start]
+                        filled[m, d, start + 1 : end] = signal[start]
 
-                filled[m, d, :not_nan_idx[0]] = signal[not_nan_idx[0]]
-                filled[m, d, not_nan_idx[-1] + 1:] = signal[not_nan_idx[-1]]
+                filled[m, d, : not_nan_idx[0]] = signal[not_nan_idx[0]]
+                filled[m, d, not_nan_idx[-1] + 1 :] = signal[not_nan_idx[-1]]
 
         return filled
 
     def data_filter(self, data, order, sampling_rate, cutoff_freq):
         nyquist = 0.5 * sampling_rate
         normal_cutoff = cutoff_freq / nyquist
-        b, a = butter(order, normal_cutoff, btype='low')
+        b, a = butter(order, normal_cutoff, btype="low")
 
         data = np.asarray(data)
         filtered_data = np.empty_like(data)

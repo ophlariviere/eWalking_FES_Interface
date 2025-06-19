@@ -18,10 +18,8 @@ DECELERATION_SMOOTHING = 0.25  # ✅ Facteur de lissage de la décélération --
 
 
 # ✅ Matrices du modèle du COP
-A = np.array([[1, dt],
-              [0, 1]])
-B = np.array([[0],
-              [1]])
+A = np.array([[1, dt], [0, 1]])
+B = np.array([[0], [1]])
 C = np.array([[1, 0]])
 
 # ✅ Matrices du LQR
@@ -35,6 +33,7 @@ Q_kalman = np.diag([0.01, 0.01])
 R_kalman = np.array([[0.05]])
 P_k = np.eye(2)
 
+
 class StateEstimator:
     def __init__(self):
         self.X_k = np.array([[CENTER_COP], [0]])
@@ -47,12 +46,12 @@ class StateEstimator:
             print("⚠️ Pas de données reçues, vérifiez la connexion.")
             return 0, CENTER_COP
 
-        fz = force_data.get('fz', 0)
-        cop = force_data.get('copy', CENTER_COP)
+        fz = force_data.get("fz", 0)
+        cop = force_data.get("copy", CENTER_COP)
         return fz, cop
 
     def kalman_update(self, cop_measured):
-        """ Mise à jour du filtre de Kalman """
+        """Mise à jour du filtre de Kalman"""
         X_k_pred = A @ self.X_k
         P_k_pred = A @ self.P_k @ A.T + Q_kalman
 
@@ -82,7 +81,7 @@ class LQGController:
         self.last_command_time = 0
 
     def compute_target_speed(self, flag_step, cop_moyen, dcom_step, fz):
-        """ ✅ Ajuste immédiatement la vitesse cible en fonction du COP """
+        """✅ Ajuste immédiatement la vitesse cible en fonction du COP"""
         if not flag_step:
             return self.v_tm
 
@@ -102,7 +101,7 @@ class LQGController:
         return v_target
 
     def update_treadmill_speed(self, v_tm_tgt):
-        """ ✅ Mise à jour fluide du tapis avec délai entre commandes """
+        """✅ Mise à jour fluide du tapis avec délai entre commandes"""
         current_time = time.time()
 
         if abs(v_tm_tgt - self.v_tm) < 0.01:
@@ -113,8 +112,14 @@ class LQGController:
 
         try:
             self.v_tm = v_tm_tgt
-            remote.run_treadmill(f"{self.v_tm:.2f}", f"{DECELERATION_SMOOTHING:.2f}", f"{DECELERATION_SMOOTHING:.2f}",
-                                 f"{self.v_tm:.2f}", f"{DECELERATION_SMOOTHING:.2f}", f"{DECELERATION_SMOOTHING:.2f}")
+            remote.run_treadmill(
+                f"{self.v_tm:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{self.v_tm:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+                f"{DECELERATION_SMOOTHING:.2f}",
+            )
             self.last_command_time = current_time
         except zmq.error.ZMQError as e:
             print(f"⚠️ Erreur ZMQ lors de l'envoi de la commande : {e}")
@@ -141,7 +146,7 @@ class TreadmillAIInterface(interface.TreadmillInterface):
         remote.run_treadmill(0, 0.2, 0.2, 0, 0.2, 0.2)
         # ✅ Mise à jour forcée de l'affichage
         self.controller.v_tm = 0  # Met la vitesse interne à zéro
-        self.speed_label.setText(f'Vitesse actuelle: 0.00 m/s')
+        self.speed_label.setText(f"Vitesse actuelle: 0.00 m/s")
         # ✅ Arrêter la sortie du DAQ en mettant 0V
         with nidaqmx.Task() as daq_task:
             daq_task.ao_channels.add_ao_voltage_chan("Dev1/ao0", min_val=0.0, max_val=5.0)
@@ -161,8 +166,8 @@ class TreadmillAIInterface(interface.TreadmillInterface):
 
                 force_data = remote.get_force_data()
                 if force_data:
-                    copx = force_data.get('copx', 0)
-                    copy = force_data.get('copy', 0)
+                    copx = force_data.get("copx", 0)
+                    copy = force_data.get("copy", 0)
                     self.update_cop(copx, copy)
 
                 v_tm_tgt = self.controller.compute_target_speed(flag_step, cop_moyen, dcom_step, fz)
@@ -174,13 +179,13 @@ class TreadmillAIInterface(interface.TreadmillInterface):
 
                 self.log_data(self.step_counter, self.controller.v_tm, treadmill_acceleration, copy, cop_moyen)
 
-                self.speed_label.setText(f'Vitesse actuelle: {self.controller.v_tm:.2f} m/s')
+                self.speed_label.setText(f"Vitesse actuelle: {self.controller.v_tm:.2f} m/s")
                 self.cop_x_label.setText(f"COP X : {copx:.2f} m")
                 self.cop_y_label.setText(f"COP Y : {copy:.2f} m")
 
                 # ✅ Envoi de la vitesse vers le DAQ
                 offset = 0.0025
-                tension = min(max(self.controller.v_tm, 0), 3) # Assure que la tension reste entre 0 et 3V
+                tension = min(max(self.controller.v_tm, 0), 3)  # Assure que la tension reste entre 0 et 3V
                 daq_task.write(tension - offset)
                 # print(f"➡️ Envoi de {tension:.2f} V au DAQ (correspondant à {self.controller.v_tm:.2f} m/s)")
 

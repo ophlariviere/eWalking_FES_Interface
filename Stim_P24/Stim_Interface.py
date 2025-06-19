@@ -66,9 +66,7 @@ class StimInterfaceWidget(QWidget):
         mass.setRange(0, 400)
         mass.setPrefix("Participant mass [kg]:  ")
         ok_mass = QPushButton("OK")
-        ok_mass.clicked.connect(
-            lambda: self.update_mass(mass.value())
-        )
+        ok_mass.clicked.connect(lambda: self.update_mass(mass.value()))
         mass_layout.addWidget(mass)
         mass_layout.addWidget(ok_mass)
 
@@ -86,7 +84,6 @@ class StimInterfaceWidget(QWidget):
         self.checkbox_pro_idik.setEnabled(False)
         model_layout.addWidget(self.checkbox_pro_idik)
 
-
         main_sett_layout.addLayout(mass_layout)
         main_sett_layout.addLayout(model_layout)
         groupbox.setLayout(main_sett_layout)
@@ -95,7 +92,6 @@ class StimInterfaceWidget(QWidget):
     def need_process_idik(self):
         self.process_idik = True
         self.checkbox_pro_idik.setChecked(True)
-
 
     def upload_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select a file")
