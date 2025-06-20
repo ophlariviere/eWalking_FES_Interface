@@ -1,5 +1,6 @@
 """
-Before starting the code, run in terminal :  docker run --name redis-server -p 6379:6379 -d redis
+Before starting the code, start Docker Desktop or run in terminal
+`docker run --name redis-server -p 6379:6379 -d redis`
 
 Info:
 The Redis database contains
@@ -31,7 +32,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QRadioButton,
 )
-from PyQt5.QtCore import QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import QTimer
 import redis
 import time
 import numpy as np
@@ -42,7 +43,6 @@ from scipy.signal import butter, filtfilt
 from pyScienceMode import RehastimP24 as St
 from pyScienceMode import Channel, Modes, Device
 from biosiglive import TcpClient
-import random
 from collections import deque
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
@@ -75,8 +75,8 @@ RUN_OPTIMISATION = False
 
 # Single value shared variables (instead of duplicating the information in the redis database)
 MASS = 70  # Initial value only (will be set by Interface.update_mass)
-MODEL_FILE_NAME = None  # Will be set by Interface.upload_file
-MODEL = None  # Will be set by Interface.upload_file
+MODEL_FILE_NAME = "C:/Users/olarivie/PycharmProjects/eWalking_FES_Interface/example/LAO.bioMod"  # Will be set by Interface.upload_file
+MODEL = biorbd.Model(MODEL_FILE_NAME)  # Will be set by Interface.upload_file
 NB_DOF = 45
 DEFAULT_BOUNDS = {
     "Amplitude": [0, 100],  # Amplitude en mA
@@ -203,6 +203,14 @@ class DataReceiver:
                     if is_redis_connected():
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
+                        if float(np.sum(received_data["force"][0])) == 0.0:
+                            print("skipping - no data")
+                            continue
+
+                        if np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
+                            print("skipping - All data is NaN")
+                            continue
+
                         """ Data markers """
                         if self.mks_name is None:
                             self.mks_name = received_data["mks_name"]
@@ -216,17 +224,17 @@ class DataReceiver:
                             markers_frame[:, i] = mks[i]
 
                         """ Data forces"""
-                        forces_frame = np.full((len(received_data["force"]), 9), np.nan)
-                        for i in range(len(received_data["force"])):
-                            for i2 in range(len(received_data["force"][i])):
-                                mean_val = float(np.mean(received_data["force"][i][i2, :]))
-                                forces_frame[i][i2] = mean_val
+                        nb_force_plates = 2  # we assume 2 in our experimental setup
+                        forces_frame = np.full((nb_force_plates, 9), np.nan)
+                        for i_platform in range(nb_force_plates):
+                            for i_force in range(9):
+                                forces_frame[i_platform, i_force] = np.nanmean(received_data["force"][i_platform][i_force, :])
 
                         # Créer un identifiant unique (timestamp + compteur)
                         self.frame_counter += 1
                         frame_id = f"{time.time()}-{self.frame_counter}"
-                        if self.frame_counter % 100 == 0:
-                            print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
+                        # if self.frame_counter % 100 == 0:
+                        #     print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
 
                         # Stocker l'ID dans une liste séparée pour suivre l'ordre
                         safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
@@ -297,11 +305,9 @@ class DataProcessor:
                 logging.error(f"Erreur dans DataProcessor: {e}")
                 time.sleep(1)
 
-    def identify_cycle_start(self, forces_all):
+    def identify_cycle_start(self, force_filtered):
         # print("Identifying cycle start...")
-
-        force_filtered = self.data_filter(forces_all[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
-        current_cycle_idx = np.ones((forces_all[0].shape[1],)) * self.cycle_counter
+        current_cycle_idx = np.ones((force_filtered.shape[1],)) * self.cycle_counter
 
         right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * 2 * MASS
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
@@ -351,7 +357,9 @@ class DataProcessor:
                     return
 
                 forces = forces_all[:, :, new_indices]
-                heel_strike_idx = self.identify_cycle_start(forces)
+                force_filtered = self.data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
+
+                heel_strike_idx = self.identify_cycle_start(force_filtered)
 
                 if heel_strike_idx.shape[0] > 0:
                     if self.cycle_start_id is None:
@@ -851,7 +859,7 @@ class BayesianOptimizer:
         global MODEL
 
         nb_frames = q.shape[1]
-        read_frequency = 100  # Hz  # TODO: @ophelielariviere, is it always 100 Hz ?
+        read_frequency = MARKER_FREQUENCY  # Hz
         time_vector = np.linspace(0, (nb_frames - 1) * 1 / read_frequency, nb_frames)
 
         comddot = self.compute_com_acceleration(MODEL, q, qdot, qddot)
@@ -1151,7 +1159,7 @@ class Interface(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Système de Stimulation Neuromusculaire")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(1000, 900)
         self.channel_inputs = {}
         self.num_config = 0
         self.do_look_need_send_stim = False
@@ -1261,14 +1269,14 @@ class Interface(QMainWindow):
         """Active le traitement IK/ID"""
         global PROCESS_ID_IK
         PROCESS_ID_IK = self.checkbox_pro_idik.isChecked()
+        if PROCESS_ID_IK:
+            logging.info("ID / IK started.")
+        else:
+            logging.info("ID / IK stopped.")
 
     def upload_file(self):
         """Charge un fichier de modèle"""
         global MODEL_FILE_NAME, MODEL
-
-        if not is_redis_connected():
-            QMessageBox.warning(self, "Erreur", "La connexion Redis n'est pas établie. Veuillez patienter...")
-            return
 
         file_name, _ = QFileDialog.getOpenFileName(self, "Sélectionner un fichier")
         if file_name:
@@ -1302,10 +1310,6 @@ class Interface(QMainWindow):
 
     def update_mass(self, mass_value):
         """Met à jour la masse du participant"""
-        if not is_redis_connected():
-            QMessageBox.warning(self, "Erreur", "La connexion Redis n'est pas établie. Veuillez patienter...")
-            return
-
         try:
             MASS = float(mass_value)
             logging.info(f"Masse mise à jour: {MASS} kg")
@@ -1737,7 +1741,9 @@ class Interface(QMainWindow):
                     y_data = data[43, :]
 
             # Actually plot the data
-            x_data = np.linspace(0, len(y_data) - 1, len(y_data)) * 1 / MARKER_FREQUENCY
+            nb_frames = y_data.shape[0]
+            # print(" nb nans in ydatda : ", np.sum(np.isnan(y_data)))
+            x_data = np.linspace(0, nb_frames - 1, nb_frames) * 1 / MARKER_FREQUENCY
             self.graph_axes[key].set_xdata(x_data)
             self.graph_axes[key].set_ydata(y_data)
 
@@ -1767,8 +1773,10 @@ class Interface(QMainWindow):
             if is_checked:
                 # Ajouter un sous-graphe pour chaque graphique sélectionné
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
-                ax.set_xlabel("Frame")
+                ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
+                ax.set_xlim(0, 10)
+                ax.set_ylim(-500, 800)
                 self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
 
@@ -1797,13 +1805,13 @@ def main():
     # Redis manager
     redis_manager = RedisConnectionManager()
 
-    # serveur_virtuel :
-    server_ip = "127.0.0.1"
-    server_port = 50000
+    # # serveur_virtuel :
+    # server_ip = "127.0.0.1"
+    # server_port = 50000
 
-    # # Main_Bertec_Cometa :
-    # server_ip = "192.168.0.1"
-    # server_port = 7
+    # Main_Bertec_Cometa :
+    server_ip = "192.168.0.1"
+    server_port = 7
 
     # Data receiver (goal: interaction with Qualisys)
     data_receiver = DataReceiver(server_ip, server_port)
