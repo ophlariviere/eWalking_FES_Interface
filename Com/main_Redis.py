@@ -9,7 +9,6 @@ The Redis database contains
 """
 
 import datetime
-import os.path
 import sys
 from enum import Enum
 import logging
@@ -86,8 +85,9 @@ DEFAULT_BOUNDS = {
 DISCOMFORT = 0
 
 # Instance Redis globale
-redis_client = None
-IS_REDIS_CONNECTED = False
+redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+redis_client.flushdb()
+IS_REDIS_CONNECTED = True
 
 
 class StimulationMode(Enum):
@@ -95,38 +95,6 @@ class StimulationMode(Enum):
     BAYESIAN = "bayesian"
     ILC = "ilc"
     # TODO: implement ILC based on https://www.sciencedirect.com/science/article/abs/pii/S0967066120300046
-
-
-class RedisConnectionManager:
-
-    def __init__(self):
-        super().__init__()
-        self.running = True
-        global redis_client
-        self.connection_status = "Not initialized"
-
-    def run(self):
-        global redis_client, IS_REDIS_CONNECTED
-        while self.running:
-            try:
-                redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=0)
-                redis_client.flushdb()
-                if redis_client.ping():
-                    self.connection_status = "Connecté à Redis"
-                    logging.info("Connexion Redis réussie")
-                    IS_REDIS_CONNECTED = True
-                    break
-                else:
-                    self.connection_status = "Échec de connexion: Redis ne répond pas"
-                    IS_REDIS_CONNECTED = False
-            except redis.ConnectionError as e:
-                self.connection_status = f"Échec de connexion: {str(e)}"
-                logging.warning(f"Échec de connexion Redis: {str(e)}")
-                IS_REDIS_CONNECTED = False
-
-    def stop(self):
-        self.running = False
-        self.wait()
 
 
 def safe_redis_operation(operation, *args, **kwargs):
@@ -190,11 +158,11 @@ class DataReceiver:
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
                         if float(np.sum(received_data["force"][0])) == 0.0:
-                            print("skipping - no data")
+                            # print("skipping - no data")
                             continue
 
                         if np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                            print("skipping - All data is NaN")
+                            # print("skipping - All data is NaN")
                             continue
 
                         """ Data markers """
@@ -219,8 +187,8 @@ class DataReceiver:
                         # Créer un identifiant unique (timestamp + compteur)
                         self.frame_counter += 1
                         frame_id = f"{time.time()}-{self.frame_counter}"
-                        # if self.frame_counter % 100 == 0:
-                        #     print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
+                        if self.frame_counter % 100 == 0:
+                            print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
 
                         # Stocker l'ID dans une liste séparée pour suivre l'ordre
                         safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
@@ -1686,6 +1654,11 @@ class Interface(QMainWindow):
         return groupbox
 
     def update_data_and_graphs(self):
+        global redis_client, IS_REDIS_CONNECTED
+
+        if not IS_REDIS_CONNECTED:
+            return
+
         # Parcours des clés de self.which_data_to_plot
         for key, is_checked in self.which_data_to_plot.items():
             if not is_checked:
@@ -1764,7 +1737,7 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
-                ax.set_xlim(0, 10)
+                ax.set_xlim(0, 8)
                 ax.set_ylim(-500, 800)
                 self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
@@ -1791,9 +1764,6 @@ def main():
     interface = Interface()
     interface.show()
 
-    # Redis manager
-    redis_manager = RedisConnectionManager()
-
     # # serveur_virtuel :
     # server_ip = "127.0.0.1"
     # server_port = 50000
@@ -1815,11 +1785,10 @@ def main():
     bayesian_optimizer = BayesianOptimizer()
 
     # --- Thread activation --- #
-    threading.Thread(target=redis_manager.run, daemon=False).start()
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
     threading.Thread(target=data_processor.start_processing, daemon=False).start()
     threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
-    threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
+    # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
     sys.exit(app.exec_())
