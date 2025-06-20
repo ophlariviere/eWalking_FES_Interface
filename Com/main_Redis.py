@@ -200,44 +200,45 @@ class DataReceiver:
 
             while self.running:
                 try:
-                    received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
+                    if is_redis_connected():
+                        received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
-                    """ Data markers """
-                    if self.mks_name is None:
-                        self.mks_name = received_data["mks_name"]
-                        safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                        safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
+                        """ Data markers """
+                        if self.mks_name is None:
+                            self.mks_name = received_data["mks_name"]
+                            safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                            safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
 
-                    mks = received_data["mks"]
-                    nb_markers = len(self.mks_name)
-                    markers_frame = np.full((3, nb_markers), np.nan)
-                    for i, name in enumerate(self.mks_name):
-                        markers_frame[:, i] = mks[i]
+                        mks = received_data["mks"]
+                        nb_markers = len(self.mks_name)
+                        markers_frame = np.full((3, nb_markers), np.nan)
+                        for i, name in enumerate(self.mks_name):
+                            markers_frame[:, i] = mks[i]
 
-                    """ Data forces"""
-                    forces_frame = np.full((len(received_data["force"]), 9), np.nan)
-                    for i in range(len(received_data["force"])):
-                        for i2 in range(len(received_data["force"][i])):
-                            mean_val = float(np.mean(received_data["force"][i][i2, :]))
-                            forces_frame[i][i2] = mean_val
+                        """ Data forces"""
+                        forces_frame = np.full((len(received_data["force"]), 9), np.nan)
+                        for i in range(len(received_data["force"])):
+                            for i2 in range(len(received_data["force"][i])):
+                                mean_val = float(np.mean(received_data["force"][i][i2, :]))
+                                forces_frame[i][i2] = mean_val
 
-                    # Créer un identifiant unique (timestamp + compteur)
-                    self.frame_counter += 1
-                    frame_id = f"{time.time()}-{self.frame_counter}"
-                    if self.frame_counter % 100 == 0:
-                        print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
+                        # Créer un identifiant unique (timestamp + compteur)
+                        self.frame_counter += 1
+                        frame_id = f"{time.time()}-{self.frame_counter}"
+                        if self.frame_counter % 100 == 0:
+                            print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
 
-                    # Stocker l'ID dans une liste séparée pour suivre l'ordre
-                    safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
-                    safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
+                        # Stocker l'ID dans une liste séparée pour suivre l'ordre
+                        safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
+                        safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
 
-                    safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-                    safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                    safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
-                    self.data_received = "Data received successfully"
+                        safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
+                        safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
+                        self.data_received = "Data received successfully"
 
-                    # time.sleep(1/self.read_frequency)
+                        # time.sleep(1/self.read_frequency)
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -1768,7 +1769,7 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel("Frame")
                 ax.set_ylabel(key)
-                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab::red")[0]
+                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
@@ -1796,9 +1797,15 @@ def main():
     # Redis manager
     redis_manager = RedisConnectionManager()
 
+    # serveur_virtuel :
+    server_ip = "127.0.0.1"
+    server_port = 50000
+
+    # # Main_Bertec_Cometa :
+    # server_ip = "192.168.0.1"
+    # server_port = 7
+
     # Data receiver (goal: interaction with Qualisys)
-    server_ip = "192.168.0.1"  #   # "192.168.0.1" 127.0.0.1# Adresse IP du serveur
-    server_port = 7  # 7 # 50000 Port à utiliser
     data_receiver = DataReceiver(server_ip, server_port)
 
     # Data processor (goal: ID, IK)
