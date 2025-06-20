@@ -87,6 +87,7 @@ DISCOMFORT = 0
 
 # Instance Redis globale
 redis_client = None
+IS_REDIS_CONNECTED = False
 
 
 class StimulationMode(Enum):
@@ -105,7 +106,7 @@ class RedisConnectionManager:
         self.connection_status = "Not initialized"
 
     def run(self):
-        global redis_client
+        global redis_client, IS_REDIS_CONNECTED
         while self.running:
             try:
                 redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=0)
@@ -113,41 +114,24 @@ class RedisConnectionManager:
                 if redis_client.ping():
                     self.connection_status = "Connecté à Redis"
                     logging.info("Connexion Redis réussie")
+                    IS_REDIS_CONNECTED = True
                     break
                 else:
                     self.connection_status = "Échec de connexion: Redis ne répond pas"
+                    IS_REDIS_CONNECTED = False
             except redis.ConnectionError as e:
                 self.connection_status = f"Échec de connexion: {str(e)}"
                 logging.warning(f"Échec de connexion Redis: {str(e)}")
-            time.sleep(1)
-
-        # Vérification périodique de la connexion
-        while self.running:
-            try:
-                if redis_client and not redis_client.ping():
-                    self.connection_status = "Connexion Redis perdue"
-                    redis_client = None
-            except redis.ConnectionError as e:
-                self.connection_status = "Connexion Redis perdue"
-                logging.warning(f"Échec de connexion Redis: {str(e)}")
-                redis_client = None
-            time.sleep(5)  # Vérification toutes les 5 secondes
+                IS_REDIS_CONNECTED = False
 
     def stop(self):
         self.running = False
         self.wait()
 
 
-def is_redis_connected():
-    global redis_client
-    try:
-        return redis_client and redis_client.ping()
-    except:
-        return False
-
-
 def safe_redis_operation(operation, *args, **kwargs):
-    if not is_redis_connected():
+    global IS_REDIS_CONNECTED
+    if not IS_REDIS_CONNECTED:
         logging.warning("Redis n'est pas connecté")
         return None
     try:
@@ -182,7 +166,7 @@ def get_new_indices(processed_frame_ids, print_option=False):
 class DataReceiver:
     """Reçoit les données du serveur TCP et les stocke dans Redis"""
 
-    def __init__(self, server_ip, server_port, read_frequency=100):
+    def __init__(self, server_ip, server_port, read_frequency=MARKER_FREQUENCY):
         super().__init__()
         self.server_ip = server_ip
         self.server_port = server_port
@@ -194,13 +178,15 @@ class DataReceiver:
         self.data_received = "Not initialized"
 
     def start_receiving(self):
+        global IS_REDIS_CONNECTED
+
         self.running = True
         try:
             self.tcp_client = TcpClient(self.server_ip, self.server_port, read_frequency=self.read_frequency)
 
             while self.running:
                 try:
-                    if is_redis_connected():
+                    if IS_REDIS_CONNECTED:
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
                         if float(np.sum(received_data["force"][0])) == 0.0:
@@ -292,12 +278,12 @@ class DataProcessor:
         self.cycle_start_id = None
 
     def start_processing(self):
-        global PROCESS_ID_IK
+        global PROCESS_ID_IK, IS_REDIS_CONNECTED
         self.running = True
 
         while self.running:
             try:
-                if is_redis_connected() and PROCESS_ID_IK:
+                if IS_REDIS_CONNECTED and PROCESS_ID_IK:
                     self.process()
                     self.processing_complete = "Processing complete"
                 # time.sleep(0.1)  # Réduire la fréquence de traitement
@@ -580,11 +566,13 @@ class BayesianOptimizer:
         self.weight_ankle_power = -1
 
     def start_optimizing(self):
+        global IS_REDIS_CONNECTED, RUN_OPTIMISATION
+
         self.running = True
 
         while self.running:
             try:
-                if is_redis_connected() and RUN_OPTIMISATION:
+                if IS_REDIS_CONNECTED and RUN_OPTIMISATION:
                     """Perform Bayesian optimization using Gaussian Processes."""
 
                     # gp_minimize will try to find the minimal value of the objective function.
@@ -655,6 +643,7 @@ class BayesianOptimizer:
         return q_mean, qdot_mean, qddot_mean, tau_mean
 
     def set_stimulation_parameters(self, params):
+        global IS_REDIS_CONNECTED
 
         # Current values of the optimized FES parameters
         R_frequency = params[0]
@@ -680,7 +669,7 @@ class BayesianOptimizer:
             "mode": "SINGLE",
         }
 
-        if is_redis_connected():
+        if IS_REDIS_CONNECTED:
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
                 safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
@@ -959,11 +948,11 @@ class StimulationProcessor:
         self.data_received = "Not initialized"
 
     def start_processing(self):
-        global ACTIVATE_STIMULATOR, START_STIMULATION, STOP_STIMULATOR
+        global ACTIVATE_STIMULATOR, START_STIMULATION, STOP_STIMULATOR, IS_REDIS_CONNECTED
 
         while self.running:
             try:
-                if is_redis_connected():
+                if IS_REDIS_CONNECTED:
 
                     if ACTIVATE_STIMULATOR:
                         self.activate_stimulator()
@@ -1646,7 +1635,7 @@ class Interface(QMainWindow):
                 "mode": inputs["mode_input"].currentText(),
             }
 
-        if is_redis_connected():
+        if IS_REDIS_CONNECTED:
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
                 safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
