@@ -1,7 +1,7 @@
 import threading
 import asyncio
 import time
-import treadmill_remote
+from Bertec_self_paced import treadmill_remote
 from Com import QualysisReception_SendAll_ToServer as qualisys_receiver
 
 
