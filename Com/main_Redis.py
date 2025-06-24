@@ -148,6 +148,9 @@ class DataReceiver:
     def start_receiving(self):
         global IS_REDIS_CONNECTED
 
+        NUMBER_OF_FORCE_DATA = 0
+        TIC_FORCE_DATA = 0
+
         self.running = True
         try:
             self.tcp_client = TcpClient(self.server_ip, self.server_port, read_frequency=self.read_frequency)
@@ -157,13 +160,26 @@ class DataReceiver:
                     if IS_REDIS_CONNECTED:
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
-                        if float(np.sum(received_data["force"][0])) == 0.0:
-                            # print("skipping - no data")
-                            continue
+                        # if float(np.nansum(received_data["mks"])) == 0.0:
+                        #     print("skipping - no markers")
+                        #     continue
 
-                        if np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                            # print("skipping - All data is NaN")
-                            continue
+                        # if float(np.sum(received_data["force"][0])) == 0.0:
+                        #     print("skipping - no data")
+                        #     continue
+                        #
+                        # elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
+                        #     print("skipping - All data is NaN")
+                        #     continue
+
+                        # print(received_data["force"][0].shape, received_data["mks"][0].shape)
+                        NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                        if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                            TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                            elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                            print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                            TIC_FORCE_DATA = TOC_FORCE_DATA
+                            NUMBER_OF_FORCE_DATA = 0
 
                         """ Data markers """
                         if self.mks_name is None:
@@ -199,8 +215,6 @@ class DataReceiver:
                         safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
                         safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
                         self.data_received = "Data received successfully"
-
-                        # time.sleep(1/self.read_frequency)
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -254,7 +268,9 @@ class DataProcessor:
                 if IS_REDIS_CONNECTED and PROCESS_ID_IK:
                     self.process()
                     self.processing_complete = "Processing complete"
-                # time.sleep(0.1)  # Réduire la fréquence de traitement
+
+                # Without the sleep, the Interface is way less responsive (but the whole computer is not slowed)
+                time.sleep(0.1)  # Réduire la fréquence de traitement
             except Exception as e:
                 logging.error(f"Erreur dans DataProcessor: {e}")
                 time.sleep(1)
@@ -1738,7 +1754,7 @@ class Interface(QMainWindow):
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
                 ax.set_xlim(0, 8)
-                ax.set_ylim(-500, 800)
+                ax.set_ylim(-50, 800)
                 self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
 
