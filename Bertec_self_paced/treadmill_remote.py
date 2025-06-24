@@ -1,8 +1,8 @@
 import numpy as np
 import time
 import threading
-import BertecRemoteControl  # Module de communication avec le tapis
-import interface
+from Bertec_self_paced import BertecRemoteControl  # Module de communication avec le tapis
+from Bertec_self_paced import interface
 import scipy.linalg
 import zmq
 import nidaqmx
