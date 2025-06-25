@@ -1,0 +1,201 @@
+version 4
+
+segment Ground
+	RT -0.000 0.000 -0.000 xyz 0.000 0.000 0.000
+endsegment
+
+
+
+segment Pelvis
+	parent Ground
+	RT -0.039 0.152 -0.071 xyz 0.246 0.534 0.976
+	translations xyz
+	rotations xyz
+	mass 39.6
+	CenterOfMass -0.01951 -0.00654 0.13013
+	inertia_xxyyzz 0.015963192160542553 0.015963192160542553 0.014949919817365554
+	mesh -0.1019 0.0443 0.0024
+	mesh -0.0990 -0.0484 -0.0024
+	mesh 0.1004 -0.1064 -0.0000
+	mesh 0.1004 0.1104 -0.0000
+	mesh -0.1019 0.0443 0.0024
+endsegment
+marker LPSIS
+	parent Pelvis
+	position -0.1019 0.0443 0.0024
+	technical 1
+	anatomical 1
+endmarker
+marker RPSIS
+	parent Pelvis
+	position -0.0990 -0.0484 -0.0024
+	technical 1
+	anatomical 1
+endmarker
+marker LASIS
+	parent Pelvis
+	position 0.1004 0.1104 -0.0000
+	technical 1
+	anatomical 1
+endmarker
+marker RASIS
+	parent Pelvis
+	position 0.1004 -0.1064 -0.0000
+	technical 1
+	anatomical 1
+endmarker
+marker RA
+	parent Pelvis
+	position -0.0729 -0.1967 0.4305
+	technical 1
+	anatomical 1
+endmarker
+marker LA
+	parent Pelvis
+	position -0.1040 0.1491 0.4371
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment RFemur
+	parent Pelvis
+	RT -0.014 -0.034 0.165 xyz 0.064 -0.078 -0.075
+	rotations xyz
+	mass 9.372
+	CenterOfMass 0.00000 -0.00000 -0.15821
+	inertia_xxyyzz 0.18412265570881514 0.18412265570881514 0.046030663927203785
+	mesh 0.0000 0.0000 0.0000
+	mesh 0.0000 0.0000 -0.4380
+endsegment
+marker RLFE
+	parent RFemur
+	position 0.0000 -0.0540 -0.4326
+	technical 1
+	anatomical 1
+endmarker
+marker RMFE
+	parent RFemur
+	position -0.0000 0.0540 -0.4435
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment RTibia
+	parent RFemur
+	RT -0.101 0.011 -0.000 xyz 0.000 0.000 -0.438
+	rotations xyz
+	mass 2.8577999999999997
+	CenterOfMass -0.00000 0.00988 -0.17350
+	inertia_xxyyzz 0.03983169602130942 0.03983169602130942 0.01770297600947086
+	mesh 0.0000 0.0000 0.0000
+	mesh -0.0000 0.0224 -0.3929
+endsegment
+marker RLM
+	parent RTibia
+	position -0.0070 -0.0166 -0.4029
+	technical 1
+	anatomical 1
+endmarker
+marker RSPH
+	parent RTibia
+	position 0.0070 0.0613 -0.3829
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment RFoot
+	parent RTibia
+	RT 0.268 0.100 -0.173 xyz -0.000 0.022 -0.393
+	rotations xyz
+	mass 0.8777999999999999
+	CenterOfMass -0.13767 -0.40662 -0.07785
+	inertia_xxyyzz 0 0 0
+	mesh 0.0000 -0.0408 0.0000
+	mesh 0.1348 -0.0135 -0.0000
+	mesh 0.0000 0.0408 -0.0000
+endsegment
+marker RTT2
+	parent RFoot
+	position 0.1348 -0.0135 -0.0000
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment LFemur
+	parent Pelvis
+	RT 0.102 -0.034 0.114 xyz 0.051 0.093 -0.068
+	rotations xyz
+	mass 9.372
+	CenterOfMass 0.00000 -0.00000 -0.15631
+	inertia_xxyyzz 0.17971473225999973 0.17971473225999973 0.04492868306499993
+	mesh 0.0000 0.0000 0.0000
+	mesh 0.0000 -0.0000 -0.4327
+endsegment
+marker LLFE
+	parent LFemur
+	position -0.0000 0.0505 -0.4292
+	technical 1
+	anatomical 1
+endmarker
+marker LMFE
+	parent LFemur
+	position 0.0000 -0.0505 -0.4363
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment LTibia
+	parent LFemur
+	RT 0.070 0.029 0.000 xyz 0.000 -0.000 -0.433
+	rotations xyz
+	mass 2.8577999999999997
+	CenterOfMass -0.00000 -0.00977 -0.19974
+	inertia_xxyyzz 0.0411451363216225 0.0411451363216225 0.01828672725405445
+	mesh 0.0000 0.0000 0.0000
+	mesh -0.0000 -0.0195 -0.3995
+endsegment
+marker LLM
+	parent LTibia
+	position -0.0059 0.0207 -0.4043
+	technical 1
+	anatomical 1
+endmarker
+marker LSPH
+	parent LTibia
+	position 0.0059 -0.0598 -0.3947
+	technical 1
+	anatomical 1
+endmarker
+
+
+
+segment LFoot
+	parent LTibia
+	RT -0.136 0.113 0.146 xyz -0.000 -0.020 -0.399
+	rotations xyz
+	mass 0.8777999999999999
+	CenterOfMass -0.28603 -0.63599 -0.12391
+	inertia_xxyyzz 0 0 0
+	mesh 0.0000 0.0410 0.0000
+	mesh 0.1336 -0.0119 0.0000
+	mesh 0.0000 -0.0410 0.0000
+endsegment
+marker LTT2
+	parent LFoot
+	position 0.1336 -0.0119 0.0000
+	technical 1
+	anatomical 1
+endmarker
+
+
+
