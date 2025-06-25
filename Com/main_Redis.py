@@ -148,8 +148,11 @@ class DataReceiver:
     def start_receiving(self):
         global IS_REDIS_CONNECTED
 
+        PRINT_FREQUENCY = True  # For debugging purposes
+
         NUMBER_OF_FORCE_DATA = 0
         TIC_FORCE_DATA = 0
+        TIC_MARKER_DATA = 0
 
         self.running = True
         try:
@@ -160,61 +163,65 @@ class DataReceiver:
                     if IS_REDIS_CONNECTED:
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
-                        # if float(np.nansum(received_data["mks"])) == 0.0:
-                        #     print("skipping - no markers")
-                        #     continue
+                        # These should not happen in a normal configuration
+                        if float(np.nansum(received_data["mks"])) == 0.0:
+                            print("skipping - no markers")
+                            continue
+                        elif float(np.sum(received_data["force"][0])) == 0.0:
+                            print("skipping - no data")
+                            continue
+                        elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
+                            print("skipping - All data is NaN")
+                            continue
 
-                        # if float(np.sum(received_data["force"][0])) == 0.0:
-                        #     print("skipping - no data")
-                        #     continue
+                        if PRINT_FREQUENCY:
+                            NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                            if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                                TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                                print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                                TIC_FORCE_DATA = TOC_FORCE_DATA
+                                NUMBER_OF_FORCE_DATA = 0
+
+                        # """ Data markers """
+                        # if self.mks_name is None:
+                        #     self.mks_name = received_data["mks_name"]
+                        #     safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                        #     safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
                         #
-                        # elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                        #     print("skipping - All data is NaN")
-                        #     continue
+                        # mks = received_data["mks"]
+                        # nb_markers = len(self.mks_name)
+                        # markers_frame = np.full((3, nb_markers), np.nan)
+                        # for i, name in enumerate(self.mks_name):
+                        #     markers_frame[:, i] = mks[i]
+                        #
+                        # """ Data forces"""
+                        # nb_force_plates = 2  # we assume 2 in our experimental setup
+                        # forces_frame = np.full((nb_force_plates, 9), np.nan)
+                        # for i_platform in range(nb_force_plates):
+                        #     for i_force in range(9):
+                        #         forces_frame[i_platform, i_force] = np.nanmean(received_data["force"][i_platform][i_force, :])
 
-                        # print(received_data["force"][0].shape, received_data["mks"][0].shape)
-                        NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                        if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                            TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                            elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                            print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                            TIC_FORCE_DATA = TOC_FORCE_DATA
-                            NUMBER_OF_FORCE_DATA = 0
-
-                        """ Data markers """
-                        if self.mks_name is None:
-                            self.mks_name = received_data["mks_name"]
-                            safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                            safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
-
-                        mks = received_data["mks"]
-                        nb_markers = len(self.mks_name)
-                        markers_frame = np.full((3, nb_markers), np.nan)
-                        for i, name in enumerate(self.mks_name):
-                            markers_frame[:, i] = mks[i]
-
-                        """ Data forces"""
-                        nb_force_plates = 2  # we assume 2 in our experimental setup
-                        forces_frame = np.full((nb_force_plates, 9), np.nan)
-                        for i_platform in range(nb_force_plates):
-                            for i_force in range(9):
-                                forces_frame[i_platform, i_force] = np.nanmean(received_data["force"][i_platform][i_force, :])
 
                         # Créer un identifiant unique (timestamp + compteur)
                         self.frame_counter += 1
                         frame_id = f"{time.time()}-{self.frame_counter}"
-                        if self.frame_counter % 100 == 0:
-                            print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}")
+                        if PRINT_FREQUENCY:
+                            if self.frame_counter % 100 == 0:
+                                TOC_MARKER_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                elapsed_time = TOC_MARKER_DATA - TIC_MARKER_DATA
+                                print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}",  "  ----  ", 100 / elapsed_time, " Hz")
+                                TIC_MARKER_DATA = TOC_MARKER_DATA
 
-                        # Stocker l'ID dans une liste séparée pour suivre l'ordre
-                        safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
-                        safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
-
-                        safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-                        safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                        safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
-                        self.data_received = "Data received successfully"
+                        # # Stocker l'ID dans une liste séparée pour suivre l'ordre
+                        # safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
+                        # safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
+                        #
+                        # safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
+                        # safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
+                        # safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
+                        # safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
+                        # self.data_received = "Data received successfully"
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -326,6 +333,9 @@ class DataProcessor:
                     # In this case, it is better to wait for the next frame to move forward with the processing.
                     return
 
+                if mks_all.shape[1] != 16 or len(mks_name[0]) != 16 or MODEL.nbMarkers() != 16:
+                    raise RuntimeError("The model used or the labeled markers are not from the 16 markerset.")
+
                 forces = forces_all[:, :, new_indices]
                 force_filtered = self.data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
 
@@ -373,13 +383,6 @@ class DataProcessor:
 
                         if MODEL is not None:
                             print("Calcul IK/ID...")
-
-                            # # Check that all frames have the same markers
-                            # mks_names_this_cycle = mks_name[cycle_start_idx]
-                            # for frame in range(cycle_start_idx, cycle_stop_idx+1):
-                            #     if mks_name[frame] != mks_names_this_cycle:
-                            #         logging.error("Les noms des marqueurs ne correspondent pas pour tous les frames.")
-                            #         return
 
                             q, qdot, qddot = self.calculate_ik(MODEL, mks, mks_name)
                             tau = self.calculate_id(MODEL, forces, q, qdot, qddot)
@@ -1683,9 +1686,9 @@ class Interface(QMainWindow):
 
             if "force" in key:
                 data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
-                data = np.array(data).transpose(1, 2, 0)
-                if data is None:
+                if data == []:
                     continue
+                data = np.array(data).transpose(1, 2, 0)
                 if "force_1" in key:
                     y_data = data[0][2, :]
                 if "force_2" in key:
@@ -1721,7 +1724,7 @@ class Interface(QMainWindow):
             # Actually plot the data
             nb_frames = y_data.shape[0]
             # print(" nb nans in ydatda : ", np.sum(np.isnan(y_data)))
-            x_data = np.linspace(0, nb_frames - 1, nb_frames) * 1 / MARKER_FREQUENCY
+            x_data = np.linspace(0, nb_frames - 1, nb_frames) # * 1 / MARKER_FREQUENCY
             self.graph_axes[key].set_xdata(x_data)
             self.graph_axes[key].set_ydata(y_data)
 
@@ -1753,7 +1756,7 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
-                ax.set_xlim(0, 8)
+                ax.set_xlim(0, 800)
                 ax.set_ylim(-50, 800)
                 self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
