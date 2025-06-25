@@ -163,16 +163,16 @@ class DataReceiver:
                     if IS_REDIS_CONNECTED:
                         received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
 
-                        # These should not happen in a normal configuration
-                        if float(np.nansum(received_data["mks"])) == 0.0:
-                            print("skipping - no markers")
-                            continue
-                        elif float(np.sum(received_data["force"][0])) == 0.0:
-                            print("skipping - no data")
-                            continue
-                        elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                            print("skipping - All data is NaN")
-                            continue
+                        # # These should not happen in a normal configuration
+                        # if float(np.nansum(received_data["mks"])) == 0.0:
+                        #     print("skipping - no markers")
+                        #     continue
+                        # elif float(np.sum(received_data["force"][0])) == 0.0:
+                        #     print("skipping - no data")
+                        #     continue
+                        # elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
+                        #     print("skipping - All data is NaN")
+                        #     continue
 
                         if PRINT_FREQUENCY:
                             NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
@@ -1778,10 +1778,10 @@ class Interface(QMainWindow):
 def main():
     """Point d'entrée principal"""
 
-    # GUI (goal: interaction with the user)
-    app = QApplication(sys.argv)
-    interface = Interface()
-    interface.show()
+    # # GUI (goal: interaction with the user)
+    # app = QApplication(sys.argv)
+    # interface = Interface()
+    # interface.show()
 
     # # serveur_virtuel :
     # server_ip = "127.0.0.1"
@@ -1805,12 +1805,12 @@ def main():
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
-    threading.Thread(target=data_processor.start_processing, daemon=False).start()
-    threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+    # threading.Thread(target=data_processor.start_processing, daemon=False).start()
+    # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
-    # Start the GUI
-    sys.exit(app.exec_())
+    # # Start the GUI
+    # sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
