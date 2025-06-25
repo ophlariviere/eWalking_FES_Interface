@@ -3,7 +3,21 @@ import qtm_rt
 from biosiglive import Server
 import numpy as np
 import xml.etree.ElementTree as ET
-import datetime
+from datetime import datetime
+from time import sleep
+import socket
+
+
+def test_server_connection():
+    global SERVER, SERVER_PORT, SERVER_IP
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(3)
+        try:
+            s.connect((SERVER_IP, SERVER_PORT))
+        except Exception as e:
+            print("Failed to connect: ", e)
+
+        print("Connexion successful to data streaming server.")
 
 
 QUALISYS_IP = "192.168.254.1"
@@ -13,10 +27,16 @@ SERVER_PORT = 7
 SYSTEM_RATE = 100
 MARKER_NAMES = []
 NUMBER_OF_FORCE_DATA = 0
-TIC = 0
+TIC_FORCE_DATA = 0
+FRAME_COUNTER = 0
+TIC_MARKER_DATA = 0
+
 
 SERVER = Server(SERVER_IP, SERVER_PORT)
 SERVER.start()
+test_server_connection()
+sleep(1)
+print("Acquisition rate : ", SERVER.acquisition_rate)
 
 
 def format_data(frame_number, header, markers, forces):
@@ -52,16 +72,25 @@ def send_data_to_server(data_all):
 
 def on_packet(packet):
     """ Callback function that is called everytime a data packet arrives from QTM """
-    global NUMBER_OF_FORCE_DATA, TIC
+    global NUMBER_OF_FORCE_DATA, TIC_FORCE_DATA, TIC_MARKER_DATA, FRAME_COUNTER
 
-    # print("on paquet")
-    frame_number = packet.framenumber
-    if frame_number % 1000 == 0:
-        TOC = datetime.datetime.timestamp(datetime.datetime.now())
-        elapsed_time = TOC - TIC
-        print(frame_number, " : ", elapsed_time, "  -----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-        TIC = TOC
-        NUMBER_OF_FORCE_DATA = 0
+    PRINT_FREQUENCY_FLAG = True
+    if PRINT_FREQUENCY_FLAG:
+        frame_number = packet.framenumber
+        if frame_number % 1000 == 0:
+            TOC = datetime.timestamp(datetime.now())
+            elapsed_time = TOC - TIC_FORCE_DATA
+            print(frame_number, " : ", elapsed_time, "  -----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+            TIC_FORCE_DATA = TOC
+            NUMBER_OF_FORCE_DATA = 0
+
+        FRAME_COUNTER += 1
+        if FRAME_COUNTER % 100 == 0:
+            TOC = datetime.timestamp(datetime.now())
+            elapsed_time = TOC - TIC_MARKER_DATA
+            print(" Markers  -----  ", FRAME_COUNTER / elapsed_time, " Hz")
+            TIC_MARKER_DATA = TOC
+            FRAME_COUNTER = 0
 
     header, markers = packet.get_3d_markers()
     # print(len(markers))
@@ -88,6 +117,8 @@ async def setup():
     for idx, label in enumerate(label.text for label in xml.iter("Name")):
         mks_name += [label]
     MARKER_NAMES = mks_name
+    # if len(mks_name) != 16:
+    #     raise RuntimeError("The model specified in Qualisys is not reduced_marketset_lower_body")
 
     await connection.stream_frames(components=["3d", "force"], on_packet=on_packet)
 
