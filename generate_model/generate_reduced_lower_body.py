@@ -1,4 +1,3 @@
-from matplotlib import pyplot as plt
 import numpy as np
 from biorbd.model_creation import (
     Axis,
