@@ -53,7 +53,7 @@ def format_data(frame_number, header, markers, forces):
     for plate, force in forces:
         plate_data = [[f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a] for f in force]
         force_array.append(np.array(plate_data).T)
-    data_all["force"] = np.array(force_array) # shape = (2, 9, nb_frames)
+    data_all["force"] = np.array(force_array)  # shape = (2, 9, nb_frames)
 
     # Organize marker data
     data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers])
@@ -62,12 +62,9 @@ def format_data(frame_number, header, markers, forces):
 
 
 def send_data_to_server(data_all):
-    # print("Send data to server")
     connection, message = SERVER.client_listening()  # If the client (other computer) is not listening, this is blocking
-    # print("message : ", message)
     if connection:
         SERVER.send_data(data_all, connection, message)
-        # print("Data sent")
 
 
 def on_packet(packet):
@@ -75,8 +72,20 @@ def on_packet(packet):
     global NUMBER_OF_FORCE_DATA, TIC_FORCE_DATA, TIC_MARKER_DATA, FRAME_COUNTER
 
     PRINT_FREQUENCY_FLAG = True
+
+    # Get the data
+    frame_number = packet.framenumber
+    header, markers = packet.get_3d_markers()
+    _, forces = packet.get_force()
+
+    # Format data in a readable way
+    data_all = format_data(frame_number, header, markers, forces)
+
+    if forces[0][0].force_number != 0:
+        NUMBER_OF_FORCE_DATA += data_all["force"].shape[2]
+
+    # Print the frequency at which the data is sent to the TCP server
     if PRINT_FREQUENCY_FLAG:
-        frame_number = packet.framenumber
         if frame_number % 1000 == 0:
             TOC = datetime.timestamp(datetime.now())
             elapsed_time = TOC - TIC_FORCE_DATA
@@ -92,16 +101,8 @@ def on_packet(packet):
             TIC_MARKER_DATA = TOC
             FRAME_COUNTER = 0
 
-    header, markers = packet.get_3d_markers()
-    # print(len(markers))
-    _, forces = packet.get_force()
-    # print(len(forces))
-    if forces[0][0].force_number != 0:  # TODO: see for markers
-        data_all = format_data(frame_number, header, markers, forces)
-        # print(data_all.keys())
-        NUMBER_OF_FORCE_DATA += data_all["force"].shape[2]
-        send_data_to_server(data_all)
-        # print(np.nanmax(data_all["force"], axis=1))
+    # Actually send the data to the TCP server
+    send_data_to_server(data_all)
 
 
 async def setup():
@@ -117,8 +118,8 @@ async def setup():
     for idx, label in enumerate(label.text for label in xml.iter("Name")):
         mks_name += [label]
     MARKER_NAMES = mks_name
-    # if len(mks_name) != 16:
-    #     raise RuntimeError("The model specified in Qualisys is not reduced_marketset_lower_body")
+    if len(mks_name) != 16:
+        raise RuntimeError("The model specified in Qualisys is not reduced_marketset_lower_body")
 
     await connection.stream_frames(components=["3d", "force"], on_packet=on_packet)
 
