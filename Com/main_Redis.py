@@ -221,7 +221,14 @@ class DataReceiver:
                         safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
 
                         # Average the forces so that we have one force per marker frame
-                        mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
+                        if forces_this_frame.shape == (2, 9, 0):
+                            # One frame out of two does not have forces
+                            mean_forces_this_frame = np.nanmean(last_force_frame, axis=2)
+                        else:
+                            # The other one has twice the number of frames it is supposed to have (TODO: fix !!!!!!!)
+                            mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
+
+                        # print(np.where(np.isnan(forces_this_frame)))  # Never has nans
                         safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
                         safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
                         safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
@@ -1154,9 +1161,11 @@ class Interface(QMainWindow):
         self.discomfort = 0
         self.which_data_to_plot = {
             key: False
-            for key in ["force_1", "force_2", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
+            for key in ["force_1", "force_2", "marker", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
         }
         self.graph_axes = {}
+        self.graph_plots = {}
+        self.initial_time = None
 
         # Initialize UI components
         self.init_ui()
@@ -1704,6 +1713,13 @@ class Interface(QMainWindow):
                     y_data = data[0][2, :]
                 if "force_2" in key:
                     y_data = data[1][2, :]
+
+            elif "marker" in key:
+                data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
+                if data == []:
+                    continue
+                y_data = np.array(data)[:, 6, 2]  # knee marker, z-axis
+
             else:
                 data_l = None
                 if "tau" in key:
@@ -1733,8 +1749,24 @@ class Interface(QMainWindow):
                     y_data = data[43, :]
 
             # Actually plot the data
-            self.graph_axes[key].set_xdata(time_vector)
-            self.graph_axes[key].set_ydata(y_data)
+            n_frames = len(y_data)
+            if len(time_vector) == n_frames:
+                x_data = np.array(time_vector)
+            elif len(time_vector) > n_frames:
+                x_data = np.array(time_vector[:n_frames])
+            else:
+                x_data = time_vector
+                for i_frame in range(n_frames - len(time_vector)):
+                    x_data.append(x_data[-1] + 1/MARKER_FREQUENCY)
+                    x_data = np.array(x_data)
+
+            if self.initial_time is None:
+                self.initial_time = x_data[0]
+            x_data -= self.initial_time
+
+            self.graph_plots[key].set_xdata(x_data)
+            self.graph_plots[key].set_ydata(y_data)
+            self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
 
         # Draw all the plots now
         self.canvas.draw()
@@ -1764,9 +1796,18 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
-                ax.set_xlim(0, 800)
-                ax.set_ylim(-50, 800)
-                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
+                ax.set_xlim(0, 1)
+                if "force" in key:
+                    ax.set_ylim(-50, 800)
+                elif "marker" in key:
+                    ax.set_ylim(0, 2)
+                elif "tau" in key:
+                    ax.set_ylim(-100, 100)
+                elif "q" in key:
+                    ax.set_ylim(-180, 180)
+
+                self.graph_axes[key] = ax
+                self.graph_plots[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
@@ -1786,10 +1827,10 @@ class Interface(QMainWindow):
 def main():
     """Point d'entrée principal"""
 
-    # # GUI (goal: interaction with the user)
-    # app = QApplication(sys.argv)
-    # interface = Interface()
-    # interface.show()
+    # GUI (goal: interaction with the user)
+    app = QApplication(sys.argv)
+    interface = Interface()
+    interface.show()
 
     # # serveur_virtuel :
     # server_ip = "127.0.0.1"
@@ -1817,8 +1858,8 @@ def main():
     # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
-    # # Start the GUI
-    # sys.exit(app.exec_())
+    # Start the GUI
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
