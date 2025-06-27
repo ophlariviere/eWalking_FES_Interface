@@ -63,20 +63,29 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 
 MARKER_FREQUENCY = 100
-FORCE_MIN_THRESHOLD = 0.05
+FORCE_MIN_THRESHOLD = 0.2  # TODO: This is too high, but the treadmill drifts quickly
 
 # Flags to check for stimulation and processing
 ACTIVATE_STIMULATOR = False
 START_STIMULATION = False
 STOP_STIMULATOR = False
-PROCESS_ID_IK = False
+PROCESS_ID_IK = True  # TODO: change back
 RUN_OPTIMISATION = False
 
 # Single value shared variables (instead of duplicating the information in the redis database)
-MASS = 70  # Initial value only (will be set by Interface.update_mass)
-MODEL_FILE_NAME = "C:/Users/olarivie/PycharmProjects/eWalking_FES_Interface/example/LAO.bioMod"  # Will be set by Interface.upload_file
+MASS = 66  # Initial value only (will be set by Interface.update_mass)
+MODEL_FILE_NAME = "C:/Users/olarivie/PycharmProjects/eWalking_FES_Interface/example/ECH.bioMod"  # Will be set by Interface.upload_file
 MODEL = biorbd.Model(MODEL_FILE_NAME)  # Will be set by Interface.upload_file
-NB_DOF = 45
+DOF_CORR = {
+            "Pelvis": [3, 4, 5],
+            "RHip": [6, 7],
+            "RKnee": [8],
+            "RAnkle": [9],
+            "LHip": [10, 11],
+            "LKnee": [12],
+            "LAnkle": [13],
+        }
+NB_DOF = MODEL.nbQ()
 DEFAULT_BOUNDS = {
     "Amplitude": [0, 100],  # Amplitude en mA
     "Pulse Width": [0, 1000],  # Largeur d'impulsion en microsecondes
@@ -153,6 +162,9 @@ class DataReceiver:
         NUMBER_OF_FORCE_DATA = 0
         TIC_FORCE_DATA = 0
         TIC_MARKER_DATA = 0
+        forces_this_frame = np.empty((2, 9, 0))
+        last_marker_frame = np.empty((16, 3))
+        last_force_frame = np.empty((2, 9, 0))
 
         self.running = True
         try:
@@ -161,67 +173,78 @@ class DataReceiver:
             while self.running:
                 try:
                     if IS_REDIS_CONNECTED:
-                        received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
+                        received_data = self.tcp_client.get_data_from_server(command=["timestamp", "force", "mks", "mks_name"])
 
-                        # # These should not happen in a normal configuration
-                        # if float(np.nansum(received_data["mks"])) == 0.0:
-                        #     print("skipping - no markers")
-                        #     continue
-                        # elif float(np.sum(received_data["force"][0])) == 0.0:
-                        #     print("skipping - no data")
-                        #     continue
-                        # elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                        #     print("skipping - All data is NaN")
-                        #     continue
+                        # Reformat data because pickle (in the tcp server) does not support numpy arrays
+                        markers_frame = np.array([m for m in received_data["mks"]])
 
-                        if PRINT_FREQUENCY:
-                            NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                            if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                                TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                                elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                                print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                                TIC_FORCE_DATA = TOC_FORCE_DATA
-                                NUMBER_OF_FORCE_DATA = 0
+                        there_are_no_forces = len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
+                        if there_are_no_forces:
+                            if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
+                                raise RuntimeError("This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces.")
 
-                        # """ Data markers """
-                        # if self.mks_name is None:
-                        #     self.mks_name = received_data["mks_name"]
-                        #     safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                        #     safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
-                        #
-                        # mks = received_data["mks"]
-                        # nb_markers = len(self.mks_name)
-                        # markers_frame = np.full((3, nb_markers), np.nan)
-                        # for i, name in enumerate(self.mks_name):
-                        #     markers_frame[:, i] = mks[i]
-                        #
-                        # """ Data forces"""
-                        # nb_force_plates = 2  # we assume 2 in our experimental setup
-                        # forces_frame = np.full((nb_force_plates, 9), np.nan)
-                        # for i_platform in range(nb_force_plates):
-                        #     for i_force in range(9):
-                        #         forces_frame[i_platform, i_force] = np.nanmean(received_data["force"][i_platform][i_force, :])
+                            mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
+                            forces = np.ones((2, 9, 40))
+                            forces[:, :, :] = np.nan
 
+                        else:
+                            force_0 = np.array([f for f in received_data["force"][0]])
+                            force_1 = np.array([f for f in received_data["force"][1]])
+                            forces = np.array([force_0, force_1])
+                            if PRINT_FREQUENCY:
+                                NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                                if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                                    TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                    elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                                    print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                                    TIC_FORCE_DATA = TOC_FORCE_DATA
+                                    NUMBER_OF_FORCE_DATA = 0
+
+                            mean_forces_this_frame = np.nanmean(forces[:, :, :20], axis=2)
+
+                        if float(np.nansum(markers_frame)) == 0.0:
+                            print("skipping - All markers are NaNs")
+                            continue
+                        elif np.all(markers_frame == last_marker_frame):
+                            print("skipping - Not a new frame")
+                            continue
+
+                        """ Data markers """
+                        if self.mks_name is None:
+                            self.mks_name = received_data["mks_name"]
+                            safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                            safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
 
                         # Créer un identifiant unique (timestamp + compteur)
                         self.frame_counter += 1
                         frame_id = f"{time.time()}-{self.frame_counter}"
                         if PRINT_FREQUENCY:
-                            if self.frame_counter % 100 == 0:
+                            if self.frame_counter % 1000 == 0:
                                 TOC_MARKER_DATA = datetime.datetime.timestamp(datetime.datetime.now())
                                 elapsed_time = TOC_MARKER_DATA - TIC_MARKER_DATA
                                 print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}",  "  ----  ", 100 / elapsed_time, " Hz")
                                 TIC_MARKER_DATA = TOC_MARKER_DATA
 
-                        # # Stocker l'ID dans une liste séparée pour suivre l'ordre
-                        # safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
-                        # safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
-                        #
-                        # safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                        # safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-                        # safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                        # safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
-                        # self.data_received = "Data received successfully"
+                        # Stocker l'ID dans une liste séparée pour suivre l'ordre
+                        safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
+                        safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
+
+                        # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
+                        safe_redis_operation(redis_client.rpush, "timestamp", received_data["timestamp"])
+                        safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
+
+                        safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
+
+                        safe_redis_operation(redis_client.rpush, "force",
+                                             json.dumps(mean_forces_this_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
+
+                        self.data_received = "Data received successfully"
+
+                        # Flush the forces_this_frame buffer for the next frame
+                        last_marker_frame = markers_frame
+                        last_force_frame = forces
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -243,22 +266,6 @@ class DataProcessor:
     def __init__(self):
         super().__init__()
         self.running = True
-        self.dof_corr = {
-            "LHip": (36, 37, 38),
-            "LKnee": (39, 40, 41),
-            "LAnkle": (42, 43, 44),
-            "RHip": (27, 28, 29),
-            "RKnee": (30, 31, 32),
-            "RAnkle": (33, 34, 35),
-            "LShoulder": (18, 19, 20),
-            "LElbow": (21, 22, 23),
-            "LWrist": (24, 25, 26),
-            "RShoulder": (9, 10, 11),
-            "RElbow": (12, 13, 14),
-            "RWrist": (15, 16, 17),
-            "Thorax": (6, 7, 8),
-            "Pelvis": (3, 4, 5),
-        }
         self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
@@ -286,12 +293,15 @@ class DataProcessor:
         # print("Identifying cycle start...")
         current_cycle_idx = np.ones((force_filtered.shape[1],)) * self.cycle_counter
 
-        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * 2 * MASS
+        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * MASS
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
-        # toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
+        toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
 
-        # # Identification : OK
+        if 1 in heel_strike_idx:
+            heel_strike_idx = heel_strike_idx[heel_strike_idx != 1]
+
+        # Identification : OK
         # plt.figure()
         # plt.plot(force_filtered[2, :])
         # for frame in heel_strike_idx:
@@ -299,7 +309,7 @@ class DataProcessor:
         # for frame in toe_off_idx:
         #     plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
         # plt.savefig("cycle_identification.png")
-        # # plt.show()
+        # plt.show()
 
         for i_cycle in range(heel_strike_idx.shape[0]):
             self.cycle_counter += 1
@@ -307,10 +317,6 @@ class DataProcessor:
                 current_cycle_idx[heel_strike_idx[i_cycle] : heel_strike_idx[i_cycle + 1]] = self.cycle_counter
             else:
                 current_cycle_idx[heel_strike_idx[i_cycle] :] = self.cycle_counter
-
-            # # TODO: remove ?
-            # safe_redis_operation(redis_client.rpush, "current_cycle_idx", json.dumps(current_cycle_idx.tolist()))
-            # safe_redis_operation(redis_client.ltrim, "current_cycle_idx", -FRAME_BUFFER_LENGTH, -1)
 
         return heel_strike_idx
 
@@ -320,12 +326,14 @@ class DataProcessor:
 
             new_indices, new_frame_ids, all_frame_ids = get_new_indices(self.processed_frame_ids, print_option=False)
 
-            if len(new_frame_ids) > 99:
+            if new_frame_ids.shape[0] > 50:
                 forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
                 mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
-                mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)]
+                mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)][0]
+                timestamps = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
+                timestamps = np.array(timestamps)
 
                 if mks_all.shape[2] != len(all_frame_ids) or forces_all.shape[2] != len(all_frame_ids):
                     # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
@@ -333,7 +341,7 @@ class DataProcessor:
                     # In this case, it is better to wait for the next frame to move forward with the processing.
                     return
 
-                if mks_all.shape[1] != 16 or len(mks_name[0]) != 16 or MODEL.nbMarkers() != 16:
+                if mks_all.shape[0] != 16 or len(mks_name) != 16 or MODEL.nbMarkers() != 16:
                     raise RuntimeError("The model used or the labeled markers are not from the 16 markerset.")
 
                 forces = forces_all[:, :, new_indices]
@@ -341,7 +349,7 @@ class DataProcessor:
 
                 heel_strike_idx = self.identify_cycle_start(force_filtered)
 
-                if heel_strike_idx.shape[0] > 0:
+                if heel_strike_idx.shape[0] > 0 and heel_strike_idx != [1]:
                     if self.cycle_start_id is None:
                         # We skip on purpose everything before the first heel strike is detected
                         self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
@@ -380,11 +388,12 @@ class DataProcessor:
 
                         mks = mks_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
                         forces = forces_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
+                        timestamps = timestamps[cycle_start_idx : cycle_stop_idx + 1]
 
                         if MODEL is not None:
                             print("Calcul IK/ID...")
 
-                            q, qdot, qddot = self.calculate_ik(MODEL, mks, mks_name)
+                            q, qdot, qddot = self.calculate_ik(MODEL, mks, mks_name, timestamps)
                             tau = self.calculate_id(MODEL, forces, q, qdot, qddot)
 
                             print("q envoyé: ", q.shape)
@@ -413,24 +422,31 @@ class DataProcessor:
         except Exception as e:
             logging.error(f"Erreur lors du traitement des données: {e}")
 
-    def calculate_ik(self, model: biorbd.Model, mks, labels):
+    @staticmethod
+    def finite_diff(data, time):
+        diff = np.zeros_like(data)
+        diff[:, 0] = (data[:, 1] - data[:, 0]) / (time[1] - time[0])
+        diff[:, 1:-1] = (data[:, 2:] - data[:, :-2]) / (time[2:] - time[:-2])
+        diff[:, -1] = (data[:, -1] - data[:, -2]) / (time[-1] - time[-2])
+        return diff
+
+    def calculate_ik(self, model: biorbd.Model, mks, labels, time):
         try:
-            n_frames = mks.shape[2]
             marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
-            markers_in_c3d = np.ndarray((3, len(index_in_c3d), n_frames)) * np.nan
-            mks_to_filter = mks[:3, index_in_c3d[index_in_c3d >= 0], :]
+            mks_to_filter = mks[index_in_c3d[index_in_c3d >= 0], :3, :].transpose(1, 0, 2)
+
             # Apply the filter to each coordinate (x, y, z) over time
             smoothed_mks = self.data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
 
             # Store the result
-            markers_in_c3d[:, index_in_c3d >= 0, :] = smoothed_mks
-            ik = biorbd.InverseKinematics(model, markers_in_c3d)
+            ik = biorbd.InverseKinematics(model, smoothed_mks)
             ik.solve(method="trf")
             q = ik.q
+            print("q shape: ", q.shape)
             q = self.data_filter(q, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
-            qdot = np.gradient(q, axis=1) * MARKER_FREQUENCY
-            qddot = np.gradient(qdot, axis=1) * MARKER_FREQUENCY
+            qdot = self.finite_diff(q, time)
+            qddot = self.finite_diff(qdot, time)
             return q, qdot, qddot
         except Exception as e:
             logging.error(f"Erreur dans calculate_ik: {e}")
@@ -512,22 +528,7 @@ class BayesianOptimizer:
     def __init__(self):
         super().__init__()
         self.running = True
-        self.dof_corr = {
-            "LHip": (36, 37, 38),
-            "LKnee": (39, 40, 41),
-            "LAnkle": (42, 43, 44),
-            "RHip": (27, 28, 29),
-            "RKnee": (30, 31, 32),
-            "RAnkle": (33, 34, 35),
-            "LShoulder": (18, 19, 20),
-            "LElbow": (21, 22, 23),
-            "LWrist": (24, 25, 26),
-            "RShoulder": (9, 10, 11),
-            "RElbow": (12, 13, 14),
-            "RWrist": (15, 16, 17),
-            "Thorax": (6, 7, 8),
-            "Pelvis": (3, 4, 5),
-        }
+
         # self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         # self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
@@ -826,8 +827,7 @@ class BayesianOptimizer:
         return energy_human
 
     def compute_ankle_power(self, qdot, tau, time_vector):
-        # TODO: find which idx is the flexion [0, 1, 2]
-        ankle_index = [self.dof_corr["RAnkle"][0], self.dof_corr["LAnkle"][0]]
+        ankle_index = [DOF_CORR["RAnkle"][0], DOF_CORR["LAnkle"][0]]
         sum_ankles = np.sum(np.abs(tau[ankle_index, :] * qdot[ankle_index, :]), axis=0)
         return np.trapezoid(sum_ankles, x=time_vector)
 
@@ -1144,9 +1144,11 @@ class Interface(QMainWindow):
         self.discomfort = 0
         self.which_data_to_plot = {
             key: False
-            for key in ["force_1", "force_2", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
+            for key in ["force_1", "force_2", "marker", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
         }
         self.graph_axes = {}
+        self.graph_plots = {}
+        self.initial_time = None
 
         # Initialize UI components
         self.init_ui()
@@ -1207,7 +1209,7 @@ class Interface(QMainWindow):
         mass_label = QLabel("Masse [kg]:")
         self.mass_spin = QSpinBox()
         self.mass_spin.setRange(0, 400)
-        self.mass_spin.setValue(70)
+        self.mass_spin.setValue(MASS)
         ok_mass = QPushButton("OK")
         ok_mass.clicked.connect(lambda: self.update_mass(self.mass_spin.value()))
         mass_layout.addWidget(mass_label)
@@ -1684,15 +1686,39 @@ class Interface(QMainWindow):
                 # Skip if we do not need to show this type of data
                 continue
 
-            if "force" in key:
-                data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
-                if data == []:
-                    continue
-                data = np.array(data).transpose(1, 2, 0)
-                if "force_1" in key:
-                    y_data = data[0][2, :]
-                if "force_2" in key:
-                    y_data = data[1][2, :]
+            time_vector = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
+            if "force" in key or "marker" in key:
+                if "force" in key:
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
+                    if data == []:
+                        continue
+                    data = np.array(data).transpose(1, 2, 0)
+                    if "force_1" in key:
+                        y_data = data[0][2, :]
+                    if "force_2" in key:
+                        y_data = data[1][2, :]
+
+                elif "marker" in key:
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
+                    if data == []:
+                        continue
+                    y_data = np.array(data)[:, 6, 2]  # knee marker, z-axis
+
+                n_frames = len(y_data)
+                if len(time_vector) == n_frames:
+                    x_data = np.array(time_vector)
+                elif len(time_vector) > n_frames:
+                    x_data = np.array(time_vector[:n_frames])
+                else:
+                    x_data = time_vector
+                    for i_frame in range(n_frames - len(time_vector)):
+                        x_data.append(x_data[-1] + 1/MARKER_FREQUENCY)
+                        x_data = np.array(x_data)
+
+                if self.initial_time is None:
+                    self.initial_time = x_data[0]
+                x_data -= self.initial_time
+
             else:
                 data_l = None
                 if "tau" in key:
@@ -1700,33 +1726,31 @@ class Interface(QMainWindow):
                 elif "q" in key:
                     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
 
-                if not data_l:
-                    continue
-                n_frames = len(data_l)
-                n_dof = len(data_l[0])
-                data = np.zeros((n_dof, n_frames))
-                for frame_i, frame in enumerate(data_l):  # Chaque frame est une liste de 8 valeurs
-                    for dof_i, dof in enumerate(frame):
-                        data[dof_i, frame_i] = dof
-                if data is None:
-                    continue
+                nb_dof = MODEL.nbQ()
+                data = np.empty((nb_dof, 0))
+                for i_cycle in range(len(data_l)):
+                    nb_frames_this_cycle = len(data_l[i_cycle][0])
+                    data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
+                    for i_dof in range(nb_dof):
+                        data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
+                    data = np.concatenate((data, data_this_cycle), axis=1)
+                    self.graph_axes[key].plot(np.array([data.shape[1] - 1, data.shape[1] - 1]), np.array([-1000, 1000]), "--", color="tab:blue")
 
+                x_data = np.arange(data.shape[1])
                 if "q" in key:
                     data = data * 180 / np.pi
 
                 if "LHip" in key:
-                    y_data = data[37, :]
+                    y_data = data[DOF_CORR["LHip"][0], :]
                 elif "LAnkle" in key:
-                    y_data = data[40, :]
-                elif "Lknee" in key:
-                    y_data = data[43, :]
+                    y_data = data[DOF_CORR["LAnkle"][0], :]
+                elif "LKnee" in key:
+                    y_data = data[DOF_CORR["LKnee"][0], :]
 
-            # Actually plot the data
-            nb_frames = y_data.shape[0]
-            # print(" nb nans in ydatda : ", np.sum(np.isnan(y_data)))
-            x_data = np.linspace(0, nb_frames - 1, nb_frames) # * 1 / MARKER_FREQUENCY
-            self.graph_axes[key].set_xdata(x_data)
-            self.graph_axes[key].set_ydata(y_data)
+
+            self.graph_plots[key].set_xdata(x_data)
+            self.graph_plots[key].set_ydata(y_data)
+            self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
 
         # Draw all the plots now
         self.canvas.draw()
@@ -1756,9 +1780,18 @@ class Interface(QMainWindow):
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
-                ax.set_xlim(0, 800)
-                ax.set_ylim(-50, 800)
-                self.graph_axes[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
+                ax.set_xlim(0, 1)
+                if "force" in key:
+                    ax.set_ylim(-50, 800)
+                elif "marker" in key:
+                    ax.set_ylim(0, 2)
+                elif "tau" in key:
+                    ax.set_ylim(-800, 800)
+                elif "q" in key:
+                    ax.set_ylim(-180, 180)
+
+                self.graph_axes[key] = ax
+                self.graph_plots[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
@@ -1778,10 +1811,10 @@ class Interface(QMainWindow):
 def main():
     """Point d'entrée principal"""
 
-    # # GUI (goal: interaction with the user)
-    # app = QApplication(sys.argv)
-    # interface = Interface()
-    # interface.show()
+    # GUI (goal: interaction with the user)
+    app = QApplication(sys.argv)
+    interface = Interface()
+    interface.show()
 
     # # serveur_virtuel :
     # server_ip = "127.0.0.1"
@@ -1805,12 +1838,12 @@ def main():
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
-    # threading.Thread(target=data_processor.start_processing, daemon=False).start()
+    threading.Thread(target=data_processor.start_processing, daemon=False).start()
     # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
-    # # Start the GUI
-    # sys.exit(app.exec_())
+    # Start the GUI
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
