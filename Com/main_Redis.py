@@ -153,6 +153,10 @@ class DataReceiver:
         NUMBER_OF_FORCE_DATA = 0
         TIC_FORCE_DATA = 0
         TIC_MARKER_DATA = 0
+        forces_this_frame = np.empty((2, 9, 0))
+        forces = np.empty((2, 9, 0))
+        last_marker_frame = np.empty((16, 3))
+        last_force_frame = np.empty((2, 9, 40))
 
         self.running = True
         try:
@@ -161,47 +165,42 @@ class DataReceiver:
             while self.running:
                 try:
                     if IS_REDIS_CONNECTED:
-                        received_data = self.tcp_client.get_data_from_server(command=["force", "mks", "mks_name"])
+                        received_data = self.tcp_client.get_data_from_server(command=["timestamp", "force", "mks", "mks_name"])
 
-                        # # These should not happen in a normal configuration
-                        # if float(np.nansum(received_data["mks"])) == 0.0:
-                        #     print("skipping - no markers")
-                        #     continue
-                        # elif float(np.sum(received_data["force"][0])) == 0.0:
-                        #     print("skipping - no data")
-                        #     continue
-                        # elif np.sum(np.isnan(received_data["force"][0][2, :])) == np.shape(received_data["force"][0])[1]:
-                        #     print("skipping - All data is NaN")
-                        #     continue
+                        # Reformat data because pickle (in the tcp server) does not support numpy arrays
+                        markers_frame = np.array([m for m in received_data["mks"]])
 
-                        if PRINT_FREQUENCY:
-                            NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                            if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                                TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                                elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                                print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                                TIC_FORCE_DATA = TOC_FORCE_DATA
-                                NUMBER_OF_FORCE_DATA = 0
+                        there_are_forces = len(received_data["force"][0]) != 0 or len(received_data["force"][1]) != 0
+                        if there_are_forces:
 
-                        # """ Data markers """
-                        # if self.mks_name is None:
-                        #     self.mks_name = received_data["mks_name"]
-                        #     safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                        #     safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
-                        #
-                        # mks = received_data["mks"]
-                        # nb_markers = len(self.mks_name)
-                        # markers_frame = np.full((3, nb_markers), np.nan)
-                        # for i, name in enumerate(self.mks_name):
-                        #     markers_frame[:, i] = mks[i]
-                        #
-                        # """ Data forces"""
-                        # nb_force_plates = 2  # we assume 2 in our experimental setup
-                        # forces_frame = np.full((nb_force_plates, 9), np.nan)
-                        # for i_platform in range(nb_force_plates):
-                        #     for i_force in range(9):
-                        #         forces_frame[i_platform, i_force] = np.nanmean(received_data["force"][i_platform][i_force, :])
+                            force_0 = np.array([f for f in received_data["force"][0]])
+                            force_1 = np.array([f for f in received_data["force"][1]])
+                            forces = np.array([force_0, force_1])
+                            the_forces_are_new = forces.shape != last_force_frame.shape or np.any(forces != last_force_frame)
+                            if the_forces_are_new:
+                                forces_this_frame = np.concatenate((forces_this_frame, forces), axis=2)
 
+                                if PRINT_FREQUENCY:
+                                    NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                                    if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                                        TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                        elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                                        print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                                        TIC_FORCE_DATA = TOC_FORCE_DATA
+                                        NUMBER_OF_FORCE_DATA = 0
+
+                        if float(np.nansum(markers_frame)) == 0.0:
+                            # print("skipping - All markers are NaNs")
+                            continue
+                        elif np.all(markers_frame == last_marker_frame):
+                            print("skipping - Not a new frame")
+                            continue
+
+                        """ Data markers """
+                        if self.mks_name is None:
+                            self.mks_name = received_data["mks_name"]
+                            safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                            safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
 
                         # Créer un identifiant unique (timestamp + compteur)
                         self.frame_counter += 1
@@ -213,15 +212,26 @@ class DataReceiver:
                                 print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}",  "  ----  ", 100 / elapsed_time, " Hz")
                                 TIC_MARKER_DATA = TOC_MARKER_DATA
 
-                        # # Stocker l'ID dans une liste séparée pour suivre l'ordre
-                        # safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
-                        # safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
-                        #
-                        # safe_redis_operation(redis_client.rpush, "force", json.dumps(forces_frame.tolist()))
-                        # safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-                        # safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                        # safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
-                        # self.data_received = "Data received successfully"
+                        # Stocker l'ID dans une liste séparée pour suivre l'ordre
+                        safe_redis_operation(redis_client.rpush, "frame_ids", frame_id)
+                        safe_redis_operation(redis_client.ltrim, "frame_ids", -FRAME_BUFFER_LENGTH, -1)
+
+                        # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
+                        safe_redis_operation(redis_client.rpush, "timestamp", received_data["timestamp"])
+                        safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
+
+                        # Average the forces so that we have one force per marker frame
+                        mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
+                        safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
+                        safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
+                        self.data_received = "Data received successfully"
+
+                        # Flush the forces_this_frame buffer for the next frame
+                        forces_this_frame = np.empty((2, 9, 0))
+                        last_marker_frame = markers_frame
+                        last_force_frame = forces
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -1684,6 +1694,7 @@ class Interface(QMainWindow):
                 # Skip if we do not need to show this type of data
                 continue
 
+            time_vector = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
             if "force" in key:
                 data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 if data == []:
@@ -1722,10 +1733,7 @@ class Interface(QMainWindow):
                     y_data = data[43, :]
 
             # Actually plot the data
-            nb_frames = y_data.shape[0]
-            # print(" nb nans in ydatda : ", np.sum(np.isnan(y_data)))
-            x_data = np.linspace(0, nb_frames - 1, nb_frames) # * 1 / MARKER_FREQUENCY
-            self.graph_axes[key].set_xdata(x_data)
+            self.graph_axes[key].set_xdata(time_vector)
             self.graph_axes[key].set_ydata(y_data)
 
         # Draw all the plots now
