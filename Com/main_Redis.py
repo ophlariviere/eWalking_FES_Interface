@@ -163,9 +163,8 @@ class DataReceiver:
         TIC_FORCE_DATA = 0
         TIC_MARKER_DATA = 0
         forces_this_frame = np.empty((2, 9, 0))
-        forces = np.empty((2, 9, 0))
         last_marker_frame = np.empty((16, 3))
-        last_force_frame = np.empty((2, 9, 40))
+        last_force_frame = np.empty((2, 9, 0))
 
         self.running = True
         try:
@@ -179,27 +178,32 @@ class DataReceiver:
                         # Reformat data because pickle (in the tcp server) does not support numpy arrays
                         markers_frame = np.array([m for m in received_data["mks"]])
 
-                        there_are_forces = len(received_data["force"][0]) != 0 or len(received_data["force"][1]) != 0
-                        if there_are_forces:
+                        there_are_no_forces = len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
+                        if there_are_no_forces:
+                            if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
+                                raise RuntimeError("This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces.")
 
+                            mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
+                            forces = np.ones((2, 9, 40))
+                            forces[:, :, :] = np.nan
+
+                        else:
                             force_0 = np.array([f for f in received_data["force"][0]])
                             force_1 = np.array([f for f in received_data["force"][1]])
                             forces = np.array([force_0, force_1])
-                            the_forces_are_new = forces.shape != last_force_frame.shape or np.any(forces != last_force_frame)
-                            if the_forces_are_new:
-                                forces_this_frame = np.concatenate((forces_this_frame, forces), axis=2)
+                            if PRINT_FREQUENCY:
+                                NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                                if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                                    TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                    elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                                    print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                                    TIC_FORCE_DATA = TOC_FORCE_DATA
+                                    NUMBER_OF_FORCE_DATA = 0
 
-                                if PRINT_FREQUENCY:
-                                    NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                                    if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                                        TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                                        elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                                        print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                                        TIC_FORCE_DATA = TOC_FORCE_DATA
-                                        NUMBER_OF_FORCE_DATA = 0
+                            mean_forces_this_frame = np.nanmean(forces[:, :, :20], axis=2)
 
                         if float(np.nansum(markers_frame)) == 0.0:
-                            # print("skipping - All markers are NaNs")
+                            print("skipping - All markers are NaNs")
                             continue
                         elif np.all(markers_frame == last_marker_frame):
                             print("skipping - Not a new frame")
@@ -229,22 +233,16 @@ class DataReceiver:
                         safe_redis_operation(redis_client.rpush, "timestamp", received_data["timestamp"])
                         safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
 
-                        # Average the forces so that we have one force per marker frame
-                        if forces_this_frame.shape == (2, 9, 0):
-                            # One frame out of two does not have forces
-                            mean_forces_this_frame = np.nanmean(last_force_frame, axis=2)
-                        else:
-                            # The other one has twice the number of frames it is supposed to have (TODO: fix !!!!!!!)
-                            mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
-
-                        safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
-                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
                         safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
                         safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
+
+                        safe_redis_operation(redis_client.rpush, "force",
+                                             json.dumps(mean_forces_this_frame.tolist()))
+                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
+
                         self.data_received = "Data received successfully"
 
                         # Flush the forces_this_frame buffer for the next frame
-                        forces_this_frame = np.empty((2, 9, 0))
                         last_marker_frame = markers_frame
                         last_force_frame = forces
 
