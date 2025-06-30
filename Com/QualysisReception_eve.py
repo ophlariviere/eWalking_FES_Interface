@@ -45,6 +45,7 @@ def format_data(frame_number, header, markers, forces):
     # Header
     data_all = {}
     data_all["frame"] = frame_number
+    data_all["timestamp"] = datetime.timestamp(datetime.now())
     data_all["header"] = header
     data_all["mks_name"] = MARKER_NAMES
 
@@ -56,7 +57,7 @@ def format_data(frame_number, header, markers, forces):
     data_all["force"] = np.array(force_array)  # shape = (2, 9, nb_frames)
 
     # Organize marker data
-    data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers])
+    data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers]) / 1000
 
     return data_all
 
