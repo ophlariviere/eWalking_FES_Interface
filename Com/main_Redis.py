@@ -69,7 +69,7 @@ FORCE_MIN_THRESHOLD = 0.2  # TODO: This is too high, but the treadmill drifts qu
 ACTIVATE_STIMULATOR = False
 START_STIMULATION = False
 STOP_STIMULATOR = False
-PROCESS_ID_IK = True  # TODO: change back
+PROCESS_ID_IK = False
 RUN_OPTIMISATION = False
 
 # Single value shared variables (instead of duplicating the information in the redis database)
@@ -132,8 +132,8 @@ def get_new_indices(processed_frame_ids, print_option=False):
         if print_option:
             if len(processed_frame_ids) > 0:
                 print("processed ", processed_frame_ids[-1])
-            print("frame ids ", frame_ids[0], frame_ids[-1])
-            print("new indices ", new_indices[0], new_indices[-1])
+                print("frame ids ", frame_ids[0], frame_ids[-1])
+                print("new indices ", new_indices[0], new_indices[-1])
     except:
         logging.error("erreur lors de lidentification des new indices.")
 
@@ -162,7 +162,6 @@ class DataReceiver:
         NUMBER_OF_FORCE_DATA = 0
         TIC_FORCE_DATA = 0
         TIC_MARKER_DATA = 0
-        forces_this_frame = np.empty((2, 9, 0))
         last_marker_frame = np.empty((16, 3))
         last_force_frame = np.empty((2, 9, 0))
 
@@ -203,10 +202,10 @@ class DataReceiver:
                             mean_forces_this_frame = np.nanmean(forces[:, :, :20], axis=2)
 
                         if float(np.nansum(markers_frame)) == 0.0:
-                            print("skipping - All markers are NaNs")
+                            # print("skipping - All markers are NaNs")
                             continue
                         elif np.all(markers_frame == last_marker_frame):
-                            print("skipping - Not a new frame")
+                            # print("skipping - Not a new frame")
                             continue
 
                         """ Data markers """
@@ -933,6 +932,11 @@ class StimulationProcessor:
         self.last_channels = []
         self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         self.data_received = "Not initialized"
+        self.fyr = None
+        self.fzr = None
+        self.fyl = None
+        self.fzl = None
+        self.should_send_stim = False
 
     def start_processing(self):
         global ACTIVATE_STIMULATOR, START_STIMULATION, STOP_STIMULATOR, IS_REDIS_CONNECTED
@@ -942,16 +946,21 @@ class StimulationProcessor:
                 if IS_REDIS_CONNECTED:
 
                     if ACTIVATE_STIMULATOR:
+                        print("Activate stimulator !!!!!!!")
                         self.activate_stimulator()
                         ACTIVATE_STIMULATOR = False
 
                     if START_STIMULATION:
+                        print("Start stimulations !!!!!!!")
                         self.call_start_stimulation(self.last_channels)
                         START_STIMULATION = False
+                        self.should_send_stim = True
 
                     if STOP_STIMULATOR:
+                        print("Stop stimulations !!!!!!!")
                         self.stop_stimulator()
                         STOP_STIMULATOR = False
+                        self.should_send_stim = False
 
                     self.stimulation_process()
                 time.sleep(0.01)
@@ -971,31 +980,41 @@ class StimulationProcessor:
                     # logging.info("Les données de forces ne correspondent pas au nombre d'IDs de frame.")
                     # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
                     # In this case, it is better to wait for the next frame to move forward with the processing.
+                    # print("Les données de forces ne correspondent pas au nombre d'IDs de frame.")
                     return
 
                 force_data = forces_all[:, :, new_indices]
                 self.processed_frame_ids.extend(new_frame_ids)
 
-                # Was like this before:
-                # fyr = force_data[0][2]  # Force Y droite
-                # fzr = force_data[0][5]  # Force Z droite
-                # fyl = force_data[0][8]  # Force Y gauche
-                # fzl = force_data[0][11]  # Force Z gauche
-                fyr = force_data[0][4]  # Force Y droite
-                fzr = force_data[0][5]  # Force Z droite
-                fyl = force_data[1][4]  # Force Y gauche
-                fzl = force_data[1][5]  # Force Z gauche
-                if len(fyr) > 20 and MASS:
+                if self.fyr is None:
+                    self.fyr = force_data[1][1, :]  # Force Y droite
+                    self.fzr = force_data[1][2, :]  # Force Z droite
+                    self.fyl = force_data[0][1, :]  # Force Y gauche
+                    self.fzl = force_data[0][2, :]  # Force Z gauche
+                else:
+                    self.fyr = np.concatenate((self.fyr, force_data[1][1, :]), axis=0)
+                    self.fzr = np.concatenate((self.fzr, force_data[1][2, :]), axis=0)
+                    self.fyl = np.concatenate((self.fyl, force_data[0][1, :]), axis=0)
+                    self.fzl = np.concatenate((self.fzl, force_data[0][2, :]), axis=0)
+                if self.fyr.shape[0] > 20 and MASS is not None:
                     info_feet = {
-                        "right": self.detect_phase_force(fyr, fzr, fzl, 1, MASS),
-                        "left": self.detect_phase_force(fyl, fzl, fzr, 2, MASS),
+                        "right": self.detect_phase_force(self.fyr, self.fzr, self.fzl, 1),
+                        "left": self.detect_phase_force(self.fyl, self.fzl, self.fzr, 2),
                     }
-                    self.manage_stimulation(info_feet)
+                    print(info_feet)
+                    if self.should_send_stim:
+                        self.manage_stimulation(info_feet)
+                    self.fyr = None
+                    self.fzr = None
+                    self.fyl = None
+                    self.fzl = None
 
         except Exception as e:
             logging.error(f"Erreur dans stimulation_process: {e}")
 
-    def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num, subject_mass):
+    def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num):
+        global MASS
+
         try:
             info = "nothing"
             last_second_force_vert = np.array(list(data_force_opp)[-30:])
@@ -1005,9 +1024,9 @@ class StimulationProcessor:
             force_vert_last = data_force_v[-1]
             deri = data_force_ap[1:] - data_force_ap[0:-1]  # last-previous
 
-            if force_vert_last > 0.7 * subject_mass and np.any(last_second_force_vert > 50):
+            if force_vert_last > 0.7 * MASS and np.any(last_second_force_vert > 50):
                 if (
-                    force_ap_last < 0.1 * subject_mass
+                    force_ap_last < 0.1 * MASS
                     and np.any(deri < 0)  # force_ap_previous > force_ap_last
                     and not self.sendStim[foot_num]
                     and self.last_foot_stim is not foot_num
@@ -1017,8 +1036,8 @@ class StimulationProcessor:
                     self.last_foot_stim = foot_num
 
             if (
-                force_vert_last < FORCE_MIN_THRESHOLD * subject_mass
-                or (np.any(deri.any > 0) and force_ap_last > -0.01 * subject_mass)  # force_ap_previous < force_ap_last
+                force_vert_last < FORCE_MIN_THRESHOLD * MASS
+                or (np.any(np.any(deri) > 0) and force_ap_last > -0.01 * MASS)  # force_ap_previous < force_ap_last
             ) and self.sendStim[foot_num]:
                 info = "StopStim"
                 self.sendStim[foot_num] = False
@@ -1069,8 +1088,8 @@ class StimulationProcessor:
     def call_start_stimulation(self, channel_to_send):
         try:
             if not self.stimulator_is_active:
-                self.activate_stimulator()
-                time.sleep(1)  # Attendre que le stimulateur soit prêt
+                logging.info("Le stimulateur doit être activé avant de commencer la stimulation.")
+                return
 
             if self.stimulator_is_sending_stim:
                 self.call_pause_stimulation()
@@ -1079,25 +1098,28 @@ class StimulationProcessor:
             if stim_params:
                 stimulator_parameters = json.loads(stim_params[-1])
 
-                channels_instructions = [
-                    Channel(
-                        no_channel=channel,
-                        name=stimulator_parameters[str(channel)]["name"],
-                        amplitude=stimulator_parameters[str(channel)]["amplitude"] if channel in channel_to_send else 0,
-                        pulse_width=stimulator_parameters[str(channel)]["pulse_width"],
-                        frequency=stimulator_parameters[str(channel)]["frequency"],
-                        mode=getattr(Modes, stimulator_parameters[str(channel)]["mode"]),
-                        device_type=Device.Rehastimp24,
+                channels_instructions = []
+                for channel in stimulator_parameters.keys():
+                    channels_instructions += [
+                        Channel(
+                            mode=getattr(Modes, stimulator_parameters[channel]["mode"]),
+                            no_channel=int(channel),
+                            amplitude=stimulator_parameters[channel]["amplitude"] if channel in channel_to_send else 0,
+                            pulse_width=stimulator_parameters[channel]["pulse_width"],
+                            frequency=stimulator_parameters[channel]["frequency"],
+                            device_type=Device.Rehastimp24,
+                            name=stimulator_parameters[channel]["name"],
                     )
-                    for channel in stimulator_parameters
                 ]
 
-                if channels_instructions:
+                if len(channels_instructions) > 0:
                     self.stimulator.init_stimulation(list_channels=channels_instructions)
                     self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
                     self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
+                    print("start OK")
                     self.stimulator_is_sending_stim = True
                     self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
+                    print(f"Stimulation démarrée sur les canaux {channel_to_send}")
 
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi de la stimulation: {e}")
@@ -1390,6 +1412,10 @@ class Interface(QMainWindow):
         self.bayesian_mode_button.setEnabled(True)
         self.ilc_mode_button.setEnabled(False)  # TODO: Charbie -> Implement ILC, for now always disabled
 
+        # Change the connexion status text
+        self.connection_status.setText("Statut: Connecté")
+        self.connection_status.setStyleSheet("color: black;")
+
         # Channel Bounds Section
         for i in range(1, 9):
             for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
@@ -1591,6 +1617,12 @@ class Interface(QMainWindow):
     def pause_fonction_to_send_stim(self):
         """Met à jour l'état d'envoi de stimulation"""
         self.do_look_need_send_stim = not self.checkpauseStim.isChecked()
+        if self.checkpauseStim.isChecked():
+            self.stimulation_status.setText("Stimulation : inactive")
+            self.stimulation_status.setStyleSheet("color: gray;")
+        else:
+            self.stimulation_status.setText("Stimulation : active")
+            self.stimulation_status.setStyleSheet("color: black;")
 
     def apply_same_settings_to_all_channels(self):
         """Applique les mêmes paramètres à tous les canaux"""
@@ -1838,8 +1870,8 @@ def main():
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
-    threading.Thread(target=data_processor.start_processing, daemon=False).start()
-    # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+    # threading.Thread(target=data_processor.start_processing, daemon=False).start()
+    threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
