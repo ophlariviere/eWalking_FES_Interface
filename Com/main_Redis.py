@@ -987,21 +987,21 @@ class StimulationProcessor:
                 self.processed_frame_ids.extend(new_frame_ids)
 
                 if self.fyr is None:
-                    self.fyr = force_data[1][1, :]  # Force Y droite
-                    self.fzr = force_data[1][2, :]  # Force Z droite
                     self.fyl = force_data[0][1, :]  # Force Y gauche
                     self.fzl = force_data[0][2, :]  # Force Z gauche
+                    self.fyr = force_data[1][1, :]  # Force Y droite
+                    self.fzr = force_data[1][2, :]  # Force Z droite
                 else:
-                    self.fyr = np.concatenate((self.fyr, force_data[1][1, :]), axis=0)
-                    self.fzr = np.concatenate((self.fzr, force_data[1][2, :]), axis=0)
                     self.fyl = np.concatenate((self.fyl, force_data[0][1, :]), axis=0)
                     self.fzl = np.concatenate((self.fzl, force_data[0][2, :]), axis=0)
+                    self.fyr = np.concatenate((self.fyr, force_data[1][1, :]), axis=0)
+                    self.fzr = np.concatenate((self.fzr, force_data[1][2, :]), axis=0)
                 if self.fyr.shape[0] > 20 and MASS is not None:
                     info_feet = {
                         "right": self.detect_phase_force(self.fyr, self.fzr, self.fzl, 1),
                         "left": self.detect_phase_force(self.fyl, self.fzl, self.fzr, 2),
                     }
-                    print(info_feet)
+                    print(info_feet, "  ---   ", self.should_send_stim)
                     if self.should_send_stim:
                         self.manage_stimulation(info_feet)
                     self.fyr = None
@@ -1014,20 +1014,23 @@ class StimulationProcessor:
 
     def detect_phase_force(self, data_force_ap, data_force_v, data_force_opp, foot_num):
         global MASS
+        subject_gravity_force = MASS * 9.81
 
         try:
             info = "nothing"
-            last_second_force_vert = np.array(list(data_force_opp)[-30:])
+            last_second_force_vert = data_force_opp[-30:]
 
             force_ap_last = data_force_ap[-1]
-            # force_ap_previous = data_force_ap[-2]
+            force_ap_previous = data_force_ap[-2]
             force_vert_last = data_force_v[-1]
-            deri = data_force_ap[1:] - data_force_ap[0:-1]  # last-previous
 
-            if force_vert_last > 0.7 * MASS and np.any(last_second_force_vert > 50):
+            subject_standing_on_this_leg = force_vert_last > 0.7 * subject_gravity_force
+            the_other_foot_still_touches = np.any(last_second_force_vert > 50)
+
+            if subject_standing_on_this_leg and not the_other_foot_still_touches:
                 if (
-                    force_ap_last < 0.1 * MASS
-                    and np.any(deri < 0)  # force_ap_previous > force_ap_last
+                    force_ap_last < 0.1 * subject_gravity_force
+                    and force_ap_previous > force_ap_last
                     and not self.sendStim[foot_num]
                     and self.last_foot_stim is not foot_num
                 ):
@@ -1036,8 +1039,8 @@ class StimulationProcessor:
                     self.last_foot_stim = foot_num
 
             if (
-                force_vert_last < FORCE_MIN_THRESHOLD * MASS
-                or (np.any(np.any(deri) > 0) and force_ap_last > -0.01 * MASS)  # force_ap_previous < force_ap_last
+                force_vert_last < 0.05 * subject_gravity_force
+                or force_ap_previous < force_ap_last and force_ap_last > -0.01 * subject_gravity_force
             ) and self.sendStim[foot_num]:
                 info = "StopStim"
                 self.sendStim[foot_num] = False
@@ -1051,21 +1054,31 @@ class StimulationProcessor:
         try:
             right = info_feet["right"]
             left = info_feet["left"]
-            active_channels = set(self.last_channels)
+            active_channels = self.last_channels
+            print("active channels: ", active_channels)
 
             if right == "StartStim":
-                active_channels.update([1, 2, 3, 4])
+                for i_chanel in range(1, 5):
+                    if i_chanel not in active_channels:
+                        active_channels.append(i_chanel)
             if left == "StartStim":
-                active_channels.update([5, 6, 7, 8])
+                for i_chanel in range(5, 9):
+                    if i_chanel not in active_channels:
+                        active_channels.append(i_chanel)
             if right == "StopStim":
-                active_channels.difference_update([1, 2, 3, 4])
+                for i_chanel in range(1, 5):
+                    if i_chanel in active_channels:
+                        active_channels.remove(i_chanel)
             if left == "StopStim":
-                active_channels.difference_update([5, 6, 7, 8])
+                for i_chanel in range(5, 9):
+                    if i_chanel in active_channels:
+                        active_channels.remove(i_chanel)
 
             new_channels = sorted(active_channels)
+            print("new channels: ", new_channels)
 
             if new_channels != self.last_channels:
-                if new_channels:
+                if len(new_channels) > 0:
                     self.call_start_stimulation(new_channels)
                     self.stimulation_status = f"Stim send to canal(s): {new_channels}"
                 else:
@@ -1091,10 +1104,14 @@ class StimulationProcessor:
                 logging.info("Le stimulateur doit être activé avant de commencer la stimulation.")
                 return
 
+            print("start stimulation on channels: ", channel_to_send)
+
             if self.stimulator_is_sending_stim:
                 self.call_pause_stimulation()
 
             stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
+            print(stim_params)
+
             if stim_params:
                 stimulator_parameters = json.loads(stim_params[-1])
 
@@ -1372,12 +1389,15 @@ class Interface(QMainWindow):
                 name_input.setPlaceholderText(f"Nom du canal {channel}")
                 amplitude_input = QSpinBox()
                 amplitude_input.setRange(DEFAULT_BOUNDS["Amplitude"][0], DEFAULT_BOUNDS["Amplitude"][1])
+                amplitude_input.setValue(20)
                 amplitude_input.setSuffix(" mA")
                 pulse_width_input = QSpinBox()
                 pulse_width_input.setRange(DEFAULT_BOUNDS["Pulse Width"][0], DEFAULT_BOUNDS["Pulse Width"][1])
+                pulse_width_input.setValue(200)
                 pulse_width_input.setSuffix(" µs")
                 frequency_input = QSpinBox()
                 frequency_input.setRange(DEFAULT_BOUNDS["Frequency"][0], DEFAULT_BOUNDS["Frequency"][1])
+                frequency_input.setValue(50)
                 frequency_input.setSuffix(" Hz")
                 mode_input = QComboBox()
                 mode_input.addItems(["SINGLE", "DOUBLET", "TRIPLET"])
@@ -1475,9 +1495,9 @@ class Interface(QMainWindow):
         global START_STIMULATION
         START_STIMULATION = True
 
-        if self.is_manual_mode:
+        if self.stimulation_mode == StimulationMode.MANUAL:
             self.update_button.setEnabled(True)
-        elif self.is_bayesian_mode:
+        elif self.stimulation_mode == StimulationMode.BAYESIAN:
             self.start_bayesian_optim_button.setEnabled(True)
             self.stop_bayesian_optim_button.setEnabled(True)
 
@@ -1505,7 +1525,7 @@ class Interface(QMainWindow):
         self.stop_button = QPushButton("Arrêter Stimulateur")
         self.stop_button.clicked.connect(self.stop_stimulator)
 
-        self.checkpauseStim = QCheckBox("Stop tying send stim")
+        self.checkpauseStim = QCheckBox("Stop trying send stim")
         self.checkpauseStim.setChecked(True)
         self.checkpauseStim.stateChanged.connect(self.pause_fonction_to_send_stim)
 
@@ -1616,13 +1636,19 @@ class Interface(QMainWindow):
 
     def pause_fonction_to_send_stim(self):
         """Met à jour l'état d'envoi de stimulation"""
+        global START_STIMULATION, STOP_STIMULATOR
+
         self.do_look_need_send_stim = not self.checkpauseStim.isChecked()
         if self.checkpauseStim.isChecked():
             self.stimulation_status.setText("Stimulation : inactive")
             self.stimulation_status.setStyleSheet("color: gray;")
+            STOP_STIMULATOR = True
+            START_STIMULATION = False
         else:
             self.stimulation_status.setText("Stimulation : active")
             self.stimulation_status.setStyleSheet("color: black;")
+            START_STIMULATION = True
+            STOP_STIMULATOR = False
 
     def apply_same_settings_to_all_channels(self):
         """Applique les mêmes paramètres à tous les canaux"""
