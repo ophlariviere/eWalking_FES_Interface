@@ -6,6 +6,8 @@ Info:
 The Redis database contains
 1. Data at each frame (force, mks, mks_names, frame_ids)
 2. Data at each cycle (q, tau, cycle_ids)
+
+Note: Always start the interface (this code) before the data server (code on the other computer).
 """
 
 import datetime
@@ -155,7 +157,7 @@ class DataReceiver:
         self.data_received = "Not initialized"
 
     def start_receiving(self):
-        global IS_REDIS_CONNECTED
+        global IS_REDIS_CONNECTED, redis_client
 
         PRINT_FREQUENCY = True  # For debugging purposes
 
@@ -164,6 +166,7 @@ class DataReceiver:
         TIC_MARKER_DATA = 0
         last_marker_frame = np.empty((16, 3))
         last_force_frame = np.empty((2, 9, 0))
+        redis_client.flushdb()
 
         self.running = True
         try:
@@ -247,6 +250,7 @@ class DataReceiver:
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
+                    redis_client.flushdb()
                     time.sleep(1)
 
         except Exception as e:
@@ -946,18 +950,15 @@ class StimulationProcessor:
                 if IS_REDIS_CONNECTED:
 
                     if ACTIVATE_STIMULATOR:
-                        print("Activate stimulator !!!!!!!")
                         self.activate_stimulator()
                         ACTIVATE_STIMULATOR = False
 
                     if START_STIMULATION:
-                        print("Start stimulations !!!!!!!")
                         self.call_start_stimulation(self.last_channels)
                         START_STIMULATION = False
                         self.should_send_stim = True
 
                     if STOP_STIMULATOR:
-                        print("Stop stimulations !!!!!!!")
                         self.stop_stimulator()
                         STOP_STIMULATOR = False
                         self.should_send_stim = False
@@ -1004,10 +1005,10 @@ class StimulationProcessor:
                     print(info_feet, "  ---   ", self.should_send_stim)
                     if self.should_send_stim:
                         self.manage_stimulation(info_feet)
-                    self.fyr = None
-                    self.fzr = None
-                    self.fyl = None
-                    self.fzl = None
+                    self.fyr = self.fyl[-19:]
+                    self.fzr = self.fzr[-19:]
+                    self.fyl = self.fyl[-19:]
+                    self.fzl = self.fzl[-19:]
 
         except Exception as e:
             logging.error(f"Erreur dans stimulation_process: {e}")
@@ -1018,30 +1019,38 @@ class StimulationProcessor:
 
         try:
             info = "nothing"
-            last_second_force_vert = data_force_opp[-30:]
+            data_force_opp = data_force_opp[-30:]
 
             force_ap_last = data_force_ap[-1]
-            force_ap_previous = data_force_ap[-2]
-            force_vert_last = data_force_v[-1]
 
-            subject_standing_on_this_leg = force_vert_last > 0.7 * subject_gravity_force
-            the_other_foot_still_touches = np.any(last_second_force_vert > 50)
+            subject_standing_on_this_foot = np.nanmean(data_force_v[-10:]) > 0.7 * subject_gravity_force
+            the_other_foot_still_touches = np.nanmean(data_force_opp[-10:]) > 50
 
-            if subject_standing_on_this_leg and not the_other_foot_still_touches:
+            antero_posterior_force_is_decreasing = np.nanmean(data_force_ap[-10:] - data_force_ap[-11:-1]) < 0
+            antero_posterior_force_is_increasing = not antero_posterior_force_is_decreasing
+
+            small_weight_on_this_foot = np.nanmean(data_force_ap[-10:]) < 0.05 * subject_gravity_force
+            antero_posterior_force_is_positive = force_ap_last > -0.01 * subject_gravity_force
+
+            currently_sending_stim_on_this_leg = self.sendStim[foot_num]
+            not_currently_sending_stim_on_this_leg = not currently_sending_stim_on_this_leg
+
+            if subject_standing_on_this_foot and not the_other_foot_still_touches:
+                antero_posterior_force_is_small = force_ap_last < 0.1 * subject_gravity_force
+                last_foot_stimulated_is_the_opposite = self.last_foot_stim is not foot_num
                 if (
-                    force_ap_last < 0.1 * subject_gravity_force
-                    and force_ap_previous > force_ap_last
-                    and not self.sendStim[foot_num]
-                    and self.last_foot_stim is not foot_num
+                    antero_posterior_force_is_small
+                    and antero_posterior_force_is_decreasing
+                    and not_currently_sending_stim_on_this_leg
+                    and last_foot_stimulated_is_the_opposite
                 ):
                     info = "StartStim"
                     self.sendStim[foot_num] = True
                     self.last_foot_stim = foot_num
 
-            if (
-                force_vert_last < 0.05 * subject_gravity_force
-                or force_ap_previous < force_ap_last and force_ap_last > -0.01 * subject_gravity_force
-            ) and self.sendStim[foot_num]:
+            elif ((small_weight_on_this_foot
+                or (antero_posterior_force_is_increasing and antero_posterior_force_is_positive))
+                  and currently_sending_stim_on_this_leg):
                 info = "StopStim"
                 self.sendStim[foot_num] = False
 
@@ -1107,6 +1116,7 @@ class StimulationProcessor:
             print("start stimulation on channels: ", channel_to_send)
 
             if self.stimulator_is_sending_stim:
+                print("Already sending -> call_pause_stimulation")
                 self.call_pause_stimulation()
 
             stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
@@ -1906,3 +1916,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
