@@ -36,6 +36,7 @@ SERVER = Server(SERVER_IP, SERVER_PORT)
 SERVER.start()
 test_server_connection()
 sleep(1)
+ACQUISITION_RATE = SERVER.acquisition_rate
 print("Acquisition rate : ", SERVER.acquisition_rate)
 
 
@@ -105,13 +106,7 @@ def on_packet(packet):
     # Actually send the data to the TCP server
     send_data_to_server(data_all)
 
-
-async def setup():
-    """ Main function """
-    connection = await qtm_rt.connect(QUALISYS_IP)
-    if connection is None:
-        return
-
+async def get_marker_names(connection):
     global MARKER_NAMES
     parameters = await connection.get_parameters(parameters=["3d"])
     xml = ET.fromstring(parameters)
@@ -122,9 +117,59 @@ async def setup():
     if len(mks_name) != 16:
         raise RuntimeError("The model specified in Qualisys is not reduced_marketset_lower_body")
 
+async def setup_stream_frames():
+    connection = await qtm_rt.connect(QUALISYS_IP)
+    if connection is None:
+        return
+
+    await get_marker_names(connection)
+
     await connection.stream_frames(components=["3d", "force"], on_packet=on_packet)
 
 
+async def setup_get_current_frame():
+    global ACQUISITION_RATE
+
+    print("setup_get_current_frame")
+
+    connection = await qtm_rt.connect(QUALISYS_IP)
+    if connection is None:
+        print("No connection")
+        return
+
+    await get_marker_names(connection)
+
+    start_time = asyncio.get_event_loop().time()  # Démarre le timer
+    while True:
+
+        # Récupère le paquet dès qu'il est disponible
+        packet = await connection.get_current_frame(components=["3d", "force"])
+
+        # Si aucun paquet n'est reçu, passe au suivant
+        if not packet:
+            continue
+
+        try:
+            on_packet(packet)
+
+            # Timer pour maintenir la boucle à 100 Hz
+            elapsed_time = asyncio.get_event_loop().time() - start_time
+            sleep_time = 1 / ACQUISITION_RATE - elapsed_time
+            if sleep_time < 0:
+                raise RuntimeError("The code is too slow for the acquisition rate")
+            await asyncio.sleep(sleep_time)
+
+            start_time = asyncio.get_event_loop().time()  # Démarre le timer
+        except:
+            continue  # Passe au paquet suivant sans arrêter le programme
+
+
 if __name__ == "__main__":
-    asyncio.ensure_future(setup())
-    asyncio.get_event_loop().run_forever()
+
+
+    # MODE = "stream_frames"
+    # asyncio.ensure_future(setup_stream_frames())
+    # asyncio.get_event_loop().run_forever()
+
+    MODE = "get_current_frame"
+    asyncio.run(setup_get_current_frame())
