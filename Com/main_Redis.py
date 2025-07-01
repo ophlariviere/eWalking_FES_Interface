@@ -1002,7 +1002,7 @@ class StimulationProcessor:
                         "right": self.detect_phase_force(self.fyr, self.fzr, self.fzl, 1),
                         "left": self.detect_phase_force(self.fyl, self.fzl, self.fzr, 2),
                     }
-                    print(info_feet, "  ---   ", self.should_send_stim)
+                    # print(info_feet, "  ---   ", self.should_send_stim)
                     if self.should_send_stim:
                         self.manage_stimulation(info_feet)
                     self.fyr = self.fyl[-19:]
@@ -1063,28 +1063,28 @@ class StimulationProcessor:
         try:
             right = info_feet["right"]
             left = info_feet["left"]
-            active_channels = self.last_channels
-            print("active channels: ", active_channels)
+            active_channels = []
+            active_channels[:] = self.last_channels[:]
 
             if right == "StartStim":
                 for i_chanel in range(1, 5):
                     if i_chanel not in active_channels:
                         active_channels.append(i_chanel)
+            elif right == "StopStim":
+                for i_chanel in range(1, 5):
+                    if i_chanel in active_channels:
+                        active_channels.remove(i_chanel)
+
             if left == "StartStim":
                 for i_chanel in range(5, 9):
                     if i_chanel not in active_channels:
                         active_channels.append(i_chanel)
-            if right == "StopStim":
-                for i_chanel in range(1, 5):
-                    if i_chanel in active_channels:
-                        active_channels.remove(i_chanel)
-            if left == "StopStim":
+            elif left == "StopStim":
                 for i_chanel in range(5, 9):
                     if i_chanel in active_channels:
                         active_channels.remove(i_chanel)
 
             new_channels = sorted(active_channels)
-            print("new channels: ", new_channels)
 
             if new_channels != self.last_channels:
                 if len(new_channels) > 0:
@@ -1093,14 +1093,15 @@ class StimulationProcessor:
                 else:
                     self.call_pause_stimulation()
                     self.stimulation_status = "Stim stop"
-                self.last_channels = new_channels
+                self.last_channels[:] = new_channels[:]
         except Exception as e:
             logging.error(f"Erreur dans manage_stimulation: {e}")
 
     def activate_stimulator(self):
         try:
             if not self.stimulator_is_active:
-                self.stimulator = St(port="COM3", show_log="Status")
+                # self.stimulator = St(port="COM3", show_log="Status")
+                self.stimulator = St(port="COM3", show_log=False)
                 self.stimulator_is_active = True
                 self.stimulation_status = "Stimulateur activé"
         except Exception as e:
@@ -1120,7 +1121,6 @@ class StimulationProcessor:
                 self.call_pause_stimulation()
 
             stim_params = safe_redis_operation(redis_client.lrange, "stimulation_parameters", 0, -1)
-            print(stim_params)
 
             if stim_params:
                 stimulator_parameters = json.loads(stim_params[-1])
@@ -1129,9 +1129,9 @@ class StimulationProcessor:
                 for channel in stimulator_parameters.keys():
                     channels_instructions += [
                         Channel(
-                            mode=getattr(Modes, stimulator_parameters[channel]["mode"]),
+                            mode=stimulator_parameters[channel]["mode"],
                             no_channel=int(channel),
-                            amplitude=stimulator_parameters[channel]["amplitude"] if channel in channel_to_send else 0,
+                            amplitude=stimulator_parameters[channel]["amplitude"] if int(channel) in channel_to_send else 0,
                             pulse_width=stimulator_parameters[channel]["pulse_width"],
                             frequency=stimulator_parameters[channel]["frequency"],
                             device_type=Device.Rehastimp24,
@@ -1143,10 +1143,9 @@ class StimulationProcessor:
                     self.stimulator.init_stimulation(list_channels=channels_instructions)
                     self.stimulator.update_stimulation(upd_list_channels=channels_instructions)
                     self.stimulator.start_stimulation(upd_list_channels=channels_instructions)
-                    print("start OK")
                     self.stimulator_is_sending_stim = True
                     self.stimulation_status = f"Stimulation démarrée sur les canaux {channel_to_send}"
-                    print(f"Stimulation démarrée sur les canaux {channel_to_send}")
+                    # print(f"Stimulation démarrée sur les canaux {channel_to_send}")
 
         except Exception as e:
             logging.error(f"Erreur lors de l'envoi de la stimulation: {e}")
@@ -1399,7 +1398,7 @@ class Interface(QMainWindow):
                 name_input.setPlaceholderText(f"Nom du canal {channel}")
                 amplitude_input = QSpinBox()
                 amplitude_input.setRange(DEFAULT_BOUNDS["Amplitude"][0], DEFAULT_BOUNDS["Amplitude"][1])
-                amplitude_input.setValue(20)
+                amplitude_input.setValue(15)
                 amplitude_input.setSuffix(" mA")
                 pulse_width_input = QSpinBox()
                 pulse_width_input.setRange(DEFAULT_BOUNDS["Pulse Width"][0], DEFAULT_BOUNDS["Pulse Width"][1])
