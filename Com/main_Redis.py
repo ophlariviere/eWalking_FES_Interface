@@ -79,14 +79,14 @@ MASS = 66  # Initial value only (will be set by Interface.update_mass)
 MODEL_FILE_NAME = "C:/Users/olarivie/PycharmProjects/eWalking_FES_Interface/example/ECH.bioMod"  # Will be set by Interface.upload_file
 MODEL = biorbd.Model(MODEL_FILE_NAME)  # Will be set by Interface.upload_file
 DOF_CORR = {
-            "Pelvis": [3, 4, 5],
-            "RHip": [6, 7],
-            "RKnee": [8],
-            "RAnkle": [9],
-            "LHip": [10, 11],
-            "LKnee": [12],
-            "LAnkle": [13],
-        }
+    "Pelvis": [3, 4, 5],
+    "RHip": [6, 7],
+    "RKnee": [8],
+    "RAnkle": [9],
+    "LHip": [10, 11],
+    "LKnee": [12],
+    "LAnkle": [13],
+}
 NB_DOF = MODEL.nbQ()
 DEFAULT_BOUNDS = {
     "Amplitude": [0, 100],  # Amplitude en mA
@@ -175,15 +175,21 @@ class DataReceiver:
             while self.running:
                 try:
                     if IS_REDIS_CONNECTED:
-                        received_data = self.tcp_client.get_data_from_server(command=["timestamp", "force", "mks", "mks_name"])
+                        received_data = self.tcp_client.get_data_from_server(
+                            command=["timestamp", "force", "mks", "mks_name"]
+                        )
 
                         # Reformat data because pickle (in the tcp server) does not support numpy arrays
                         markers_frame = np.array([m for m in received_data["mks"]])
 
-                        there_are_no_forces = len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
+                        there_are_no_forces = (
+                            len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
+                        )
                         if there_are_no_forces:
                             if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
-                                raise RuntimeError("This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces.")
+                                raise RuntimeError(
+                                    "This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces."
+                                )
 
                             mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
                             forces = np.ones((2, 9, 40))
@@ -224,7 +230,12 @@ class DataReceiver:
                             if self.frame_counter % 1000 == 0:
                                 TOC_MARKER_DATA = datetime.datetime.timestamp(datetime.datetime.now())
                                 elapsed_time = TOC_MARKER_DATA - TIC_MARKER_DATA
-                                print(f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}",  "  ----  ", 100 / elapsed_time, " Hz")
+                                print(
+                                    f"Frame ID: {frame_id} - Frame Counter: {self.frame_counter}",
+                                    "  ----  ",
+                                    100 / elapsed_time,
+                                    " Hz",
+                                )
                                 TIC_MARKER_DATA = TOC_MARKER_DATA
 
                         # Stocker l'ID dans une liste séparée pour suivre l'ordre
@@ -238,8 +249,7 @@ class DataReceiver:
                         safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
                         safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
 
-                        safe_redis_operation(redis_client.rpush, "force",
-                                             json.dumps(mean_forces_this_frame.tolist()))
+                        safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
                         safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
 
                         self.data_received = "Data received successfully"
@@ -399,7 +409,9 @@ class DataProcessor:
 
                             q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
                             tau = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
-                            gait_parameters = self.compute_gait_parameters(timestamps, force_filtered_R, force_filtered_L, mks, mks_name)
+                            gait_parameters = self.compute_gait_parameters(
+                                timestamps, force_filtered_R, force_filtered_L, mks, mks_name
+                            )
 
                             print("q envoyé: ", q.shape)
 
@@ -449,7 +461,7 @@ class DataProcessor:
         cycle_start = timestamps[0]
         cycle_end = timestamps[-1]
         cycle_duration = cycle_end - cycle_start
-        
+
         # The cycle starts when the right foot is on the ground
         toe_off_R_idx = np.where(force_filtered_R > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
         toe_off_R = timestamps[toe_off_R_idx]
@@ -459,7 +471,10 @@ class DataProcessor:
         nb_half_frames_cycle = int(len(force_filtered_L) / 2)
         toe_off_L_idx = np.where(force_filtered_L[:nb_half_frames_cycle] > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
         toe_off_L = timestamps[toe_off_L_idx]
-        heel_strike_L_idx = nb_half_frames_cycle + np.where(force_filtered_L[nb_half_frames_cycle:] > MASS * FORCE_MIN_THRESHOLD * 9.81)[0]
+        heel_strike_L_idx = (
+            nb_half_frames_cycle
+            + np.where(force_filtered_L[nb_half_frames_cycle:] > MASS * FORCE_MIN_THRESHOLD * 9.81)[0]
+        )
         heel_strike_L = timestamps[heel_strike_L_idx]
         stance_duration_L = (toe_off_L - cycle_start) + (cycle_end - heel_strike_L)
 
@@ -1077,9 +1092,10 @@ class StimulationProcessor:
                     self.sendStim[foot_num] = True
                     self.last_foot_stim = foot_num
 
-            elif ((small_weight_on_this_foot
-                or (antero_posterior_force_is_increasing and antero_posterior_force_is_positive))
-                  and currently_sending_stim_on_this_leg):
+            elif (
+                small_weight_on_this_foot
+                or (antero_posterior_force_is_increasing and antero_posterior_force_is_positive)
+            ) and currently_sending_stim_on_this_leg:
                 info = "StopStim"
                 self.sendStim[foot_num] = False
 
@@ -1160,13 +1176,15 @@ class StimulationProcessor:
                         Channel(
                             mode=stimulator_parameters[channel]["mode"],
                             no_channel=int(channel),
-                            amplitude=stimulator_parameters[channel]["amplitude"] if int(channel) in channel_to_send else 0,
+                            amplitude=(
+                                stimulator_parameters[channel]["amplitude"] if int(channel) in channel_to_send else 0
+                            ),
                             pulse_width=stimulator_parameters[channel]["pulse_width"],
                             frequency=stimulator_parameters[channel]["frequency"],
                             device_type=Device.Rehastimp24,
                             name=stimulator_parameters[channel]["name"],
-                    )
-                ]
+                        )
+                    ]
 
                 if len(channels_instructions) > 0:
                     self.stimulator.init_stimulation(list_channels=channels_instructions)
@@ -1221,7 +1239,17 @@ class Interface(QMainWindow):
         self.discomfort = 0
         self.which_data_to_plot = {
             key: False
-            for key in ["force_1", "force_2", "marker", "tau_LHip", "tau_LKnee", "tau_LAnkle", "q_LHip", "q_LKnee", "q_LAnkle"]
+            for key in [
+                "force_1",
+                "force_2",
+                "marker",
+                "tau_LHip",
+                "tau_LKnee",
+                "tau_LAnkle",
+                "q_LHip",
+                "q_LKnee",
+                "q_LAnkle",
+            ]
         }
         self.graph_axes = {}
         self.graph_plots = {}
@@ -1808,7 +1836,7 @@ class Interface(QMainWindow):
                 else:
                     x_data = time_vector
                     for i_frame in range(n_frames - len(time_vector)):
-                        x_data.append(x_data[-1] + 1/MARKER_FREQUENCY)
+                        x_data.append(x_data[-1] + 1 / MARKER_FREQUENCY)
                         x_data = np.array(x_data)
 
                 if self.initial_time is None:
@@ -1830,7 +1858,12 @@ class Interface(QMainWindow):
                     for i_dof in range(nb_dof):
                         data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
                     data = np.concatenate((data, data_this_cycle), axis=1)
-                    self.graph_axes[key].plot(np.array([data.shape[1] - 1, data.shape[1] - 1]), np.array([-1000, 1000]), "--", color="tab:blue")
+                    self.graph_axes[key].plot(
+                        np.array([data.shape[1] - 1, data.shape[1] - 1]),
+                        np.array([-1000, 1000]),
+                        "--",
+                        color="tab:blue",
+                    )
 
                 x_data = np.arange(data.shape[1])
                 if "q" in key:
@@ -1842,7 +1875,6 @@ class Interface(QMainWindow):
                     y_data = data[DOF_CORR["LAnkle"][0], :]
                 elif "LKnee" in key:
                     y_data = data[DOF_CORR["LKnee"][0], :]
-
 
             self.graph_plots[key].set_xdata(x_data)
             self.graph_plots[key].set_ydata(y_data)
@@ -1944,4 +1976,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

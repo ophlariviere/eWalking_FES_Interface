@@ -161,7 +161,7 @@ class ReducedModel(BiomechanicalModel):
                 )
             ),
             inertia_parameters=InertiaParameters(
-                mass=lambda m, bio:  0.142 * self.body_mass,
+                mass=lambda m, bio: 0.142 * self.body_mass,
                 center_of_mass=lambda m, bio: point_on_vector(
                     0.3612, start=self._hip_joint_center(m, bio, "R"), end=self._knee_joint_center(m, bio, "R")
                 ),
@@ -350,8 +350,8 @@ class ReducedModel(BiomechanicalModel):
     def _legs_length(self, m, bio: BiomechanicalModelReal):
         # TODO: Verify 95% makes sense
         return {
-            "R": np.nanmean(np.linalg.norm(m["RASIS"][:3, :]-m["RLM"][:3, :], axis=0)),
-            "L": np.nanmean(np.linalg.norm(m["LASIS"][:3, :]-m["LLM"][:3, :], axis=0)),
+            "R": np.nanmean(np.linalg.norm(m["RASIS"][:3, :] - m["RLM"][:3, :], axis=0)),
+            "L": np.nanmean(np.linalg.norm(m["LASIS"][:3, :] - m["LLM"][:3, :], axis=0)),
         }
 
     def _hip_joint_center(self, m, bio: BiomechanicalModelReal, side: str) -> np.ndarray:
@@ -390,19 +390,18 @@ class ReducedModel(BiomechanicalModel):
 
         mean_legs_length = np.nanmean((legs_length["R"], legs_length["L"]))
         asis_troc_dist = 0.1288 * legs_length[side] - 0.04856
-        #asis_troc_dist = np.nanmean(np.linalg.norm(m["RGT"][:3, :] - m["RASIS"][:3, :], axis=0))
-        x = 0.011-0.063 * mean_legs_length
-        y = 8/1000 + 0.086 * mean_legs_length
-        z = -9/1000 - 0.078 * mean_legs_length
-        Axe = m[f"{side}ASIS"]-PJC
-        dir = np.mean(Axe[1,:])/np.abs(np.mean(Axe[1,:]))
-        x = PJC[0,:] - x
-        y = PJC[1,:] + y*dir
-        z = PJC[2,:] + z
-        return np.array((x, y, z, m[f"{side}ASIS"][3,:])) #m[f"{side}ASIS"] + (np.array((x, y, z, 0))[:, np.newaxis]/2)
-
-
-
+        # asis_troc_dist = np.nanmean(np.linalg.norm(m["RGT"][:3, :] - m["RASIS"][:3, :], axis=0))
+        x = 0.011 - 0.063 * mean_legs_length
+        y = 8 / 1000 + 0.086 * mean_legs_length
+        z = -9 / 1000 - 0.078 * mean_legs_length
+        Axe = m[f"{side}ASIS"] - PJC
+        dir = np.mean(Axe[1, :]) / np.abs(np.mean(Axe[1, :]))
+        x = PJC[0, :] - x
+        y = PJC[1, :] + y * dir
+        z = PJC[2, :] + z
+        return np.array(
+            (x, y, z, m[f"{side}ASIS"][3, :])
+        )  # m[f"{side}ASIS"] + (np.array((x, y, z, 0))[:, np.newaxis]/2)
 
     def _knee_axis(self, side) -> Axis:
         """
@@ -459,18 +458,18 @@ class ReducedModel(BiomechanicalModel):
         """
 
         # TODO: Some of these values as just copy of their relative
-        return {"LHip": (15, 16, 17),
-                "LKnee": (18, 19, 20),
-                "LAnkle": (21, 22, 23),
-                "LAbsAnkle": (24, 25, 26),
-                "RHip": (6, 7, 8),
-                "RKnee": (9, 10, 11),
-                "RAnkle": (12, 13, 14),
-                "RAbsAnkle": (33, 34, 35),
-                "LPelvis": (3, 4, 5),
-                "RPelvis": (3, 4, 5),
-                }
-
+        return {
+            "LHip": (15, 16, 17),
+            "LKnee": (18, 19, 20),
+            "LAnkle": (21, 22, 23),
+            "LAbsAnkle": (24, 25, 26),
+            "RHip": (6, 7, 8),
+            "RKnee": (9, 10, 11),
+            "RAnkle": (12, 13, 14),
+            "RAbsAnkle": (33, 34, 35),
+            "LPelvis": (3, 4, 5),
+            "RPelvis": (3, 4, 5),
+        }
 
     def personalize_model(self, static_trial: str, model_path: str = "temporary.bioMod"):
         """
@@ -495,7 +494,6 @@ def main():
     # Generate the personalized kinematic model
     tools = ReducedModel(body_mass=66)
     tools.personalize_model(static_trial)
-
 
 
 if __name__ == "__main__":

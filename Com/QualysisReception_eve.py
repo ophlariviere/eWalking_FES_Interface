@@ -71,7 +71,7 @@ def send_data_to_server(data_all):
 
 
 def on_packet(packet):
-    """ Callback function that is called everytime a data packet arrives from QTM """
+    """Callback function that is called everytime a data packet arrives from QTM"""
     global NUMBER_OF_FORCE_DATA, TIC_FORCE_DATA, TIC_MARKER_DATA, FRAME_COUNTER
 
     PRINT_FREQUENCY_FLAG = True
@@ -107,6 +107,7 @@ def on_packet(packet):
     # Actually send the data to the TCP server
     send_data_to_server(data_all)
 
+
 async def get_marker_names(connection):
     global MARKER_NAMES
     parameters = await connection.get_parameters(parameters=["3d"])
@@ -117,6 +118,7 @@ async def get_marker_names(connection):
     MARKER_NAMES = mks_name
     if len(mks_name) != 16:
         raise RuntimeError("The model specified in Qualisys is not reduced_marketset_lower_body")
+
 
 async def setup_stream_frames():
     connection = await qtm_rt.connect(QUALISYS_IP)
@@ -166,7 +168,6 @@ async def setup_get_current_frame():
 
 
 if __name__ == "__main__":
-
 
     # MODE = "stream_frames"
     # asyncio.ensure_future(setup_stream_frames())
