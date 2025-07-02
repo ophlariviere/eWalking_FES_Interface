@@ -65,7 +65,7 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 
 MARKER_FREQUENCY = 100
-FORCE_MIN_THRESHOLD = 0.2  # TODO: This is too high, but the treadmill drifts quickly
+FORCE_MIN_THRESHOLD = 0.05
 
 # Flags to check for stimulation and processing
 ACTIVATE_STIMULATOR = False
@@ -296,7 +296,7 @@ class DataProcessor:
         # print("Identifying cycle start...")
         current_cycle_idx = np.ones((force_filtered.shape[1],)) * self.cycle_counter
 
-        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * MASS
+        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * MASS * 9.81
         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
         toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
@@ -348,9 +348,10 @@ class DataProcessor:
                     raise RuntimeError("The model used or the labeled markers are not from the 16 markerset.")
 
                 forces = forces_all[:, :, new_indices]
-                force_filtered = self.data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
+                force_filtered_R = self.data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
+                force_filtered_L = self.data_filter(forces[1, 0:3, :], 2, MARKER_FREQUENCY, 10)
 
-                heel_strike_idx = self.identify_cycle_start(force_filtered)
+                heel_strike_idx = self.identify_cycle_start(force_filtered_R)
 
                 if heel_strike_idx.shape[0] > 0 and heel_strike_idx != [1]:
                     if self.cycle_start_id is None:
@@ -396,8 +397,9 @@ class DataProcessor:
                         if MODEL is not None:
                             print("Calcul IK/ID...")
 
-                            q, qdot, qddot = self.calculate_ik(MODEL, mks, mks_name, timestamps)
-                            tau = self.calculate_id(MODEL, forces, q, qdot, qddot)
+                            q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
+                            tau = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
+                            gait_parameters = self.compute_gait_parameters(timestamps, force_filtered_R, force_filtered_L, mks, mks_name)
 
                             print("q envoyé: ", q.shape)
 
@@ -418,6 +420,9 @@ class DataProcessor:
                             safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
                             safe_redis_operation(redis_client.ltrim, "tau", -CYCLE_BUFFER_LENGTH, -1)
 
+                            safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
+                            safe_redis_operation(redis_client.ltrim, "gait_parameters", -CYCLE_BUFFER_LENGTH, -1)
+
                         self.cycle_start_id = cycle_stop_id
                         self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx : cycle_stop_idx + 1])
                         self.cycle_idx += 1
@@ -433,7 +438,44 @@ class DataProcessor:
         diff[:, -1] = (data[:, -1] - data[:, -2]) / (time[-1] - time[-2])
         return diff
 
-    def calculate_ik(self, model: biorbd.Model, mks, labels, time):
+    @staticmethod
+    def compute_gait_parameters(timestamps, force_filtered_R, force_filtered_L, mks, mks_name):
+        """Compute the gait parameters from the cycle data."""
+        global FORCE_MIN_THRESHOLD, MASS
+
+        if force_filtered_R.shape[1] != mks.shape[1]:
+            raise RuntimeError("I expected the data to be the same shape")
+
+        cycle_start = timestamps[0]
+        cycle_end = timestamps[-1]
+        cycle_duration = cycle_end - cycle_start
+        
+        # The cycle starts when the right foot is on the ground
+        toe_off_R_idx = np.where(force_filtered_R > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
+        toe_off_R = timestamps[toe_off_R_idx]
+        stance_duration_R = toe_off_R - cycle_start
+
+        # The left stance is splitted in two parts
+        nb_half_frames_cycle = int(len(force_filtered_L) / 2)
+        toe_off_L_idx = np.where(force_filtered_L[:nb_half_frames_cycle] > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
+        toe_off_L = timestamps[toe_off_L_idx]
+        heel_strike_L_idx = nb_half_frames_cycle + np.where(force_filtered_L[nb_half_frames_cycle:] > MASS * FORCE_MIN_THRESHOLD * 9.81)[0]
+        heel_strike_L = timestamps[heel_strike_L_idx]
+        stance_duration_L = (toe_off_L - cycle_start) + (cycle_end - heel_strike_L)
+
+        angle_marker_index_R = [mks_name.index("RSPH"), mks_name.index("RLM")]
+        ankle_position_start_R = mks[angle_marker_index_R, 0]
+        ankle_position_stop_R = mks[angle_marker_index_R, toe_off_R_idx]
+        step_distance_R = np.linalg.norm(ankle_position_stop_R - ankle_position_start_R)
+
+        angle_marker_index_L = [mks_name.index("LSPH"), mks_name.index("LLM")]
+        ankle_position_start_L = mks[angle_marker_index_L, heel_strike_L_idx]
+        ankle_position_stop_L = mks[angle_marker_index_L, toe_off_R_idx]
+        step_distance_L = np.linalg.norm(ankle_position_stop_L - ankle_position_start_L)
+
+        return [cycle_duration, stance_duration_R, stance_duration_L, step_distance_R, step_distance_L]
+
+    def inverse_kinematics(self, model: biorbd.Model, mks, labels, time):
         try:
             marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
@@ -452,10 +494,10 @@ class DataProcessor:
             qddot = self.finite_diff(qdot, time)
             return q, qdot, qddot
         except Exception as e:
-            logging.error(f"Erreur dans calculate_ik: {e}")
+            logging.error(f"Erreur dans inverse_kinematics: {e}")
             return None, None, None
 
-    def calculate_id(self, model: biorbd.Model, force, q, qdot, qddot):
+    def inverse_dynamics(self, model: biorbd.Model, force, q, qdot, qddot):
         try:
             num_contacts = len(force)
             num_frames = force[0].shape[1]
@@ -485,7 +527,7 @@ class DataProcessor:
 
             return tau_data
         except Exception as e:
-            logging.error(f"Erreur dans calculate_id: {e}")
+            logging.error(f"Erreur dans inverse_dynamics: {e}")
             return None
 
     def data_filter(self, data, order, sampling_rate, cutoff_freq):
@@ -577,7 +619,7 @@ class BayesianOptimizer:
                         n_jobs=1,
                     )  # x0, y0, kappa[exploitation, exploration], xi [minimal improvement default 0.01]
 
-                    # TODO: allow for different chanel (now 0 and 1)
+                    # TODO: allow for different chanel (now right = 1 and left = 5)
 
                     # TODO: stop when the same point has been hit t time (t=5 in general)
 
@@ -645,15 +687,15 @@ class BayesianOptimizer:
         L_width = params[5]
 
         stimulator_parameters = {}
-        stimulator_parameters["0"] = {
-            "name": f"Canal 0",
+        stimulator_parameters["1"] = {
+            "name": f"Canal 1",
             "amplitude": R_intensity,
             "pulse_width": R_width,
             "frequency": R_frequency,
             "mode": "SINGLE",
         }
-        stimulator_parameters["1"] = {
-            "name": f"Canal 1",
+        stimulator_parameters["5"] = {
+            "name": f"Canal 5",
             "amplitude": L_intensity,
             "pulse_width": L_width,
             "frequency": L_frequency,
@@ -677,12 +719,14 @@ class BayesianOptimizer:
             qdot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qdot", 0, -1)]
             qddot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qddot", 0, -1)]
             tau_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+            gait_parameters_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_parameters", 0, -1)]
 
             if (
                 len(q_all) != len(cycle_indices)
                 or len(qdot_all) != len(cycle_indices)
                 or len(qddot_all) != len(cycle_indices)
                 or len(tau_all) != len(cycle_indices)
+                or len(gait_parameters_all) != len(cycle_indices)
             ):
                 # We are in a weird state, it is better to wait for the next loop
                 continue
@@ -700,9 +744,10 @@ class BayesianOptimizer:
                 qdot = np.array(qdot_all[this_cycle_index])
                 qddot = np.array(qddot_all[this_cycle_index])
                 tau = np.array(tau_all[this_cycle_index])
+                gait_parameters = gait_parameters_all[this_cycle_index]
                 no_new_data = False
 
-        return q, qdot, qddot, tau
+        return q, qdot, qddot, tau, gait_parameters
 
     def make_an_iteration(self, params):
         global START_STIMULATION, STOP_STIMULATOR
@@ -715,65 +760,49 @@ class BayesianOptimizer:
 
         # Collect data while waiting for the subject to get a stable walking pattern with these parameters
         cycles = {
-            # "StanceDuration_L": [],
-            # "StanceDuration_R": [],
-            # "Cycleduration": [],
-            # "StepWidth": [],
-            # "StepLength_L": [],
-            # "StepLength_R": [],
-            # "PropulsionDuration_L": [],
-            # "PropulsionDuration_R": [],
-            # "Cadence": [],
             "q": [],
             "qdot": [],
             "qddot": [],
             "tau": [],
+            "cycle_duration": [],
+            "stance_duration_R": [],
+            "stance_duration_L": [],
+            "step_distance_R": [],
+            "step_distance_L": [],
             "nb_frames": [],
         }
 
         stable = False
         while not stable:
-            q_new, qdot_new, qddot_new, tau_new = self.get_cycle_data()
+            q_new, qdot_new, qddot_new, tau_new, gait_parameters_new = self.get_cycle_data()
 
-            # cycles["StanceDuration_L"] += new_gait_parameters["StanceDuration_L"]
-            # cycles["StanceDuration_R"] += new_gait_parameters["StanceDuration_R"]
-            # cycles["Cycleduration"] += new_gait_parameters["Cycleduration"]
-            # cycles["StepWidth"] += new_gait_parameters["StepWidth"]
-            # cycles["StepLength_L"] += new_gait_parameters["StepLength_L"]
-            # cycles["StepLength_R"] += new_gait_parameters["StepLength_R"]
-            # cycles["PropulsionDuration_L"] += new_gait_parameters["PropulsionDuration_L"]
-            # cycles["PropulsionDuration_R"] += new_gait_parameters["PropulsionDuration_R"]
-            # cycles["Cadence"] += new_gait_parameters["Cadence"]
             cycles["q"] += [q_new]
             cycles["qdot"] += [qdot_new]
             cycles["qddot"] += [qddot_new]
             cycles["tau"] += [tau_new]
+            cycles["cycle_duration"] += gait_parameters_new[0]
+            cycles["stance_duration_R"] += gait_parameters_new[1]
+            cycles["stance_duration_L"] += gait_parameters_new[2]
+            cycles["step_distance_R"] += gait_parameters_new[3]
+            cycles["step_distance_L"] += gait_parameters_new[4]
             cycles["nb_frames"] += q_new.shape[1]
             if len(cycles["q"]) > 10:
                 # Compute the std of the last 10 cycles
-                StanceDuration_L_std = np.nanstd(cycles["StanceDuration_L"][-10:])
-                StanceDuration_R_std = np.nanstd(cycles["StanceDuration_R"][-10:])
-                Cycleduration_std = np.nanstd(cycles["Cycleduration"][-10:])
-                StepWidth_std = np.nanstd(cycles["StepWidth"][-10:])
-                StepLength_L_std = np.nanstd(cycles["StepLength_L"][-10:])
-                StepLength_R_std = np.nanstd(cycles["StepLength_R"][-10:])
-                PropulsionDuration_L_std = np.nanstd(cycles["PropulsionDuration_L"][-10:])
-                PropulsionDuration_R_std = np.nanstd(cycles["PropulsionDuration_R"][-10:])
-                Cadence_std = np.nanstd(cycles["Cadence"][-10:])
+                cycle_duration_std = np.nanstd(cycles["cycle_duration"][-10:])
+                stance_duration_R_std = np.nanstd(cycles["stance_duration_R"][-10:])
+                stance_duration_L_std = np.nanstd(cycles["stance_duration_L"][-10:])
+                step_distance_R_std = np.nanstd(cycles["step_distance_R"][-10:])
+                step_distance_L_std = np.nanstd(cycles["step_distance_L"][-10:])
 
                 # Check if the last 10 cycles are stable
                 # TODO !!!
                 stable = True
                 # stable = (
-                #         StanceDuration_L_std < 0.05  # 5% of the cycle
-                #         and StanceDuration_R_std < 0.05  # 5% of the cycle
-                #         and Cycleduration_std < 0.05  # 5% of the cycle
-                #         and StepWidth_std < 0.05  # 5cm
-                #         and StepLength_L_std < 0.05  # 5cm
-                #         and StepLength_R_std < 0.05  # 5cm
-                #         and PropulsionDuration_L_std < 0.05  # 5% of the cycle
-                #         and PropulsionDuration_R_std < 0.05  # 5% of the cycle
-                #         and Cadence_std < 5
+                # cycle_duration_std < 0.05 * np.nanmean(cycles["cycle_duration"][-10:])
+                # and stance_duration_R_std < 0.05 * np.nanmean(cycles["stance_duration_R"][-10:])
+                # and stance_duration_L_std < 0.05 * np.nanmean(cycles["stance_duration_L"][-10:])
+                # and step_distance_R_std < 0.05 * np.nanmean(cycles["step_distance_R"][-10:])
+                # and step_distance_L_std < 0.05 * np.nanmean(cycles["step_distance_L"][-10:])
                 # )
 
         # Stop the stimulation
