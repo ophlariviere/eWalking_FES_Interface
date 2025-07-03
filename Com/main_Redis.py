@@ -359,11 +359,10 @@ class DataProcessor:
 
                 forces = forces_all[:, :, new_indices]
                 force_filtered_R = self.data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
-                force_filtered_L = self.data_filter(forces[1, 0:3, :], 2, MARKER_FREQUENCY, 10)
 
                 heel_strike_idx = self.identify_cycle_start(force_filtered_R)
 
-                if heel_strike_idx.shape[0] > 0 and heel_strike_idx != [1]:
+                if heel_strike_idx.shape[0] > 0:
                     if self.cycle_start_id is None:
                         # We skip on purpose everything before the first heel strike is detected
                         self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
@@ -408,9 +407,11 @@ class DataProcessor:
                             print("Calcul IK/ID...")
 
                             q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
-                            tau = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
+                            tau, force_filtered = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
+
+                            print("before")
                             gait_parameters = self.compute_gait_parameters(
-                                timestamps, force_filtered_R, force_filtered_L, mks, mks_name
+                                timestamps, force_filtered, mks, mks_name
                             )
 
                             print("q envoyé: ", q.shape)
@@ -435,6 +436,16 @@ class DataProcessor:
                             safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
                             safe_redis_operation(redis_client.ltrim, "gait_parameters", -CYCLE_BUFFER_LENGTH, -1)
 
+                            # Also add again the original data split by cycle
+                            safe_redis_operation(redis_client.rpush, "mks_cycle", json.dumps(mks))
+                            safe_redis_operation(redis_client.ltrim, "mks_cycle", -CYCLE_BUFFER_LENGTH, -1)
+
+                            safe_redis_operation(redis_client.rpush, "forces_cycle", json.dumps(forces))
+                            safe_redis_operation(redis_client.ltrim, "forces_cycle", -CYCLE_BUFFER_LENGTH, -1)
+
+                            safe_redis_operation(redis_client.rpush, "timestamps_cycle", json.dumps(timestamps))
+                            safe_redis_operation(redis_client.ltrim, "timestamps_cycle", -CYCLE_BUFFER_LENGTH, -1)
+
                         self.cycle_start_id = cycle_stop_id
                         self.processed_frame_ids.extend(all_frame_ids[cycle_start_idx : cycle_stop_idx + 1])
                         self.cycle_idx += 1
@@ -451,43 +462,57 @@ class DataProcessor:
         return diff
 
     @staticmethod
-    def compute_gait_parameters(timestamps, force_filtered_R, force_filtered_L, mks, mks_name):
+    def compute_gait_parameters(timestamps, force_filtered, mks, mks_name):
         """Compute the gait parameters from the cycle data."""
         global FORCE_MIN_THRESHOLD, MASS
 
-        if force_filtered_R.shape[1] != mks.shape[1]:
+        force_filtered_R = force_filtered[0, 2, :]
+        force_filtered_L = force_filtered[1, 2, :]
+
+        print(timestamps.shape)
+        if force_filtered_R.shape[0] != mks.shape[2]:
+            print(force_filtered_R.shape, mks.shape)
             raise RuntimeError("I expected the data to be the same shape")
 
+        print(1)
         cycle_start = timestamps[0]
         cycle_end = timestamps[-1]
         cycle_duration = cycle_end - cycle_start
 
+        print(2)
         # The cycle starts when the right foot is on the ground
         toe_off_R_idx = np.where(force_filtered_R > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
         toe_off_R = timestamps[toe_off_R_idx]
         stance_duration_R = toe_off_R - cycle_start
 
+        print(3)
         # The left stance is splitted in two parts
         nb_half_frames_cycle = int(len(force_filtered_L) / 2)
+        print(nb_half_frames_cycle)
         toe_off_L_idx = np.where(force_filtered_L[:nb_half_frames_cycle] > MASS * FORCE_MIN_THRESHOLD * 9.81)[-1]
+        print(toe_off_L_idx)
         toe_off_L = timestamps[toe_off_L_idx]
         heel_strike_L_idx = (
             nb_half_frames_cycle
             + np.where(force_filtered_L[nb_half_frames_cycle:] > MASS * FORCE_MIN_THRESHOLD * 9.81)[0]
         )
+        print(heel_strike_L_idx)
         heel_strike_L = timestamps[heel_strike_L_idx]
         stance_duration_L = (toe_off_L - cycle_start) + (cycle_end - heel_strike_L)
-
+        print(stance_duration_L)
+        print(4)
         angle_marker_index_R = [mks_name.index("RSPH"), mks_name.index("RLM")]
-        ankle_position_start_R = mks[angle_marker_index_R, 0]
-        ankle_position_stop_R = mks[angle_marker_index_R, toe_off_R_idx]
+        ankle_position_start_R = mks[angle_marker_index_R, :, 0]
+        ankle_position_stop_R = mks[angle_marker_index_R, :, toe_off_R_idx]
         step_distance_R = np.linalg.norm(ankle_position_stop_R - ankle_position_start_R)
 
+        print(5)
         angle_marker_index_L = [mks_name.index("LSPH"), mks_name.index("LLM")]
-        ankle_position_start_L = mks[angle_marker_index_L, heel_strike_L_idx]
-        ankle_position_stop_L = mks[angle_marker_index_L, toe_off_R_idx]
+        ankle_position_start_L = mks[angle_marker_index_L, :, heel_strike_L_idx]
+        ankle_position_stop_L = mks[angle_marker_index_L, :, toe_off_R_idx]
         step_distance_L = np.linalg.norm(ankle_position_stop_L - ankle_position_start_L)
 
+        print(6)
         return [cycle_duration, stance_duration_R, stance_duration_L, step_distance_R, step_distance_L]
 
     def inverse_kinematics(self, model: biorbd.Model, mks, labels, time):
@@ -540,7 +565,7 @@ class DataProcessor:
                 tau = model.InverseDynamics(q[:, i], qdot[:, i], qddot[:, i], ext_load)
                 tau_data[:, i] = tau.to_array()
 
-            return tau_data
+            return tau_data, force_filtered
         except Exception as e:
             logging.error(f"Erreur dans inverse_dynamics: {e}")
             return None
@@ -1834,14 +1859,9 @@ class Interface(QMainWindow):
                 elif len(time_vector) > n_frames:
                     x_data = np.array(time_vector[:n_frames])
                 else:
-                    x_data = time_vector
+                    x_data = np.array(time_vector)
                     for i_frame in range(n_frames - len(time_vector)):
-                        x_data.append(x_data[-1] + 1 / MARKER_FREQUENCY)
-                        x_data = np.array(x_data)
-
-                if self.initial_time is None:
-                    self.initial_time = x_data[0]
-                x_data -= self.initial_time
+                        x_data = np.concatenate((x_data, np.array([x_data[-1] + 1 / MARKER_FREQUENCY])))
 
             else:
                 data_l = None
@@ -1850,14 +1870,18 @@ class Interface(QMainWindow):
                 elif "q" in key:
                     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
 
+                time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp_cycle", 0, -1)]
+
                 nb_dof = MODEL.nbQ()
                 data = np.empty((nb_dof, 0))
+                x_data = np.empty((0, ))
                 for i_cycle in range(len(data_l)):
                     nb_frames_this_cycle = len(data_l[i_cycle][0])
                     data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
                     for i_dof in range(nb_dof):
                         data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
                     data = np.concatenate((data, data_this_cycle), axis=1)
+                    x_data = np.concatenate((x_data, time_vectors[i_cycle]))
                     self.graph_axes[key].plot(
                         np.array([data.shape[1] - 1, data.shape[1] - 1]),
                         np.array([-1000, 1000]),
@@ -1865,7 +1889,6 @@ class Interface(QMainWindow):
                         color="tab:blue",
                     )
 
-                x_data = np.arange(data.shape[1])
                 if "q" in key:
                     data = data * 180 / np.pi
 
@@ -1876,9 +1899,14 @@ class Interface(QMainWindow):
                 elif "LKnee" in key:
                     y_data = data[DOF_CORR["LKnee"][0], :]
 
-            self.graph_plots[key].set_xdata(x_data)
-            self.graph_plots[key].set_ydata(y_data)
-            self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
+            if x_data.shape[0] > 0:
+                if self.initial_time is None:
+                    self.initial_time = x_data[0]
+                x_data -= self.initial_time
+
+                self.graph_plots[key].set_xdata(x_data)
+                self.graph_plots[key].set_ydata(y_data)
+                # self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
 
         # Draw all the plots now
         self.canvas.draw()
@@ -1966,7 +1994,7 @@ def main():
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=False).start()
-    # threading.Thread(target=data_processor.start_processing, daemon=False).start()
+    threading.Thread(target=data_processor.start_processing, daemon=False).start()
     threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
