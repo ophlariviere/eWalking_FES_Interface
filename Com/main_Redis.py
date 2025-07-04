@@ -1260,21 +1260,14 @@ class Interface(QMainWindow):
         self.num_config = 0
         self.do_look_need_send_stim = False
         self.stimulation_mode = StimulationMode.MANUAL
-        self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in range(1, 9)}
+        self.channel_bounds = {f"Canal {i}": DEFAULT_BOUNDS for i in [1, 2, 5, 6]}
         self.discomfort = 0
         self.which_data_to_plot = {
-            key: False
-            for key in [
-                "force_1",
-                "force_2",
-                "marker",
-                "tau_LHip",
-                "tau_LKnee",
-                "tau_LAnkle",
-                "q_LHip",
-                "q_LKnee",
-                "q_LAnkle",
-            ]
+            "forces": {"active": False, "nb_lines": 4},
+            "marker": {"active": False, "nb_lines": 1},
+            "tau": {"active": False, "nb_lines": 3},
+            "q": {"active": False, "nb_lines": 3},
+            "gait_params": {"active": False, "nb_lines": 5},
         }
         self.graph_axes = {}
         self.graph_plots = {}
@@ -1439,7 +1432,7 @@ class Interface(QMainWindow):
         # Ajouter les cases à cocher pour sélectionner les canaux
         self.checkboxes = []
         checkbox_layout = QHBoxLayout()
-        for i in range(1, 9):
+        for i in [1, 2, 5, 6]:
             checkbox = QCheckBox(f"Canal {i}")
             checkbox.stateChanged.connect(self.update_channel_inputs)
             checkbox_layout.addWidget(checkbox)
@@ -1527,11 +1520,7 @@ class Interface(QMainWindow):
         self.connection_status.setText("Statut: Connecté")
         self.connection_status.setStyleSheet("color: black;")
 
-        # Channel Bounds Section
-        for i in range(1, 9):
-            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
+        self.modify_channel_bound_enabling(True)
 
     def update_stimulation(self):
         if self.stimulator is not None:
@@ -1546,11 +1535,14 @@ class Interface(QMainWindow):
         self.stop_bayesian_optim_button.setEnabled(False)
         # TODO: Charbie -> add the ICL buttons
 
+        self.modify_channel_bound_enabling(False)
+
+    def modify_channel_bound_enabling(self, value: bool):
         # Channel Bounds Section
-        for i in range(1, 9):
+        for i in [1, 2, 5, 6]:
             for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(value)
+                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(value)
 
     def bayesian_optim_chosen(self):
         global RUN_OPTIMISATION
@@ -1561,11 +1553,7 @@ class Interface(QMainWindow):
         self.stop_bayesian_optim_button.setEnabled(True)
         # TODO: Charbie -> add the ICL buttons
 
-        # Channel Bounds Section
-        for i in range(1, 9):
-            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(True)
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(True)
+        self.modify_channel_bound_enabling(True)
 
     def ilc_optim_chosen(self):
         global RUN_OPTIMISATION
@@ -1576,11 +1564,7 @@ class Interface(QMainWindow):
         self.stop_bayesian_optim_button.setEnabled(False)
         # TODO: Charbie -> add the ICL buttons
 
-        # Channel Bounds Section
-        for i in range(1, 9):
-            for i_parameter, parameter_name in enumerate(DEFAULT_BOUNDS.keys()):
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][0].setEnabled(False)
-                self.channel_bounds_inputs[f"Canal {i}"][parameter_name][1].setEnabled(False)
+        self.modify_channel_bound_enabling(False)
 
     def start_stimulation(self):
         global START_STIMULATION
@@ -1665,8 +1649,8 @@ class Interface(QMainWindow):
         layout.addWidget(self.ilc_mode_button, 2, 0, 1, 1)
 
         # Channel Bounds Section
-        self.channel_bounds_inputs = {f"Canal {i}": {} for i in range(1, 9)}
-        for i in range(1, 9):
+        self.channel_bounds_inputs = {f"Canal {i}": {} for i in [1, 2, 5, 6]}
+        for i in [1, 2, 5, 6]:
             channel_label = QLabel(f"Canal {i} :")
             layout.addWidget(channel_label, 3, i - 1)
 
@@ -1830,30 +1814,31 @@ class Interface(QMainWindow):
             return
 
         # Parcours des clés de self.which_data_to_plot
-        for key, is_checked in self.which_data_to_plot.items():
+        for key in self.which_data_to_plot.keys():
+            is_checked = self.which_data_to_plot[key]["active"]
             if not is_checked:
                 # Skip if we do not need to show this type of data
                 continue
 
             time_vector = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
-            if "force" in key or "marker" in key:
-                if "force" in key:
+            if key in ["forces", "marker"]:
+                if key == "forces":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                     if data == []:
                         continue
                     data = np.array(data).transpose(1, 2, 0)
-                    if "force_1" in key:
-                        y_data = data[0][2, :]
-                    if "force_2" in key:
-                        y_data = data[1][2, :]
+                    y_data = [data[0][1, :],
+                              data[0][2, :],
+                              data[1][1, :],
+                              data[1][2, :]]
 
-                elif "marker" in key:
+                elif key == "marker":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
                     if data == []:
                         continue
-                    y_data = np.array(data)[:, 6, 2]  # knee marker, z-axis
+                    y_data = [np.array(data)[:, 6, 2]]  # knee marker, z-axis
 
-                n_frames = len(y_data)
+                n_frames = len(y_data[0])
                 if len(time_vector) == n_frames:
                     x_data = np.array(time_vector)
                 elif len(time_vector) > n_frames:
@@ -1863,11 +1848,11 @@ class Interface(QMainWindow):
                     for i_frame in range(n_frames - len(time_vector)):
                         x_data = np.concatenate((x_data, np.array([x_data[-1] + 1 / MARKER_FREQUENCY])))
 
-            else:
+            elif key in ["tau", "q"]:
                 data_l = None
-                if "tau" in key:
+                if key == "tau":
                     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
-                elif "q" in key:
+                elif key == "q":
                     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
 
                 time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp_cycle", 0, -1)]
@@ -1886,26 +1871,42 @@ class Interface(QMainWindow):
                         np.array([data.shape[1] - 1, data.shape[1] - 1]),
                         np.array([-1000, 1000]),
                         "--",
-                        color="tab:blue",
+                        color="tab:black",
                     )
 
-                if "q" in key:
+                if key == "q":
                     data = data * 180 / np.pi
 
-                if "LHip" in key:
-                    y_data = data[DOF_CORR["LHip"][0], :]
-                elif "LAnkle" in key:
-                    y_data = data[DOF_CORR["LAnkle"][0], :]
-                elif "LKnee" in key:
-                    y_data = data[DOF_CORR["LKnee"][0], :]
+                y_data = [data[DOF_CORR["LHip"][0], :],
+                          data[DOF_CORR["LAnkle"][0], :],
+                          data[DOF_CORR["LKnee"][0], :]]
+
+            elif key == "gait_params":
+                data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_params", 0, -1)]
+                if data == []:
+                    continue
+                data = np.array(data)
+                y_data = [
+                    data[:, 0],  # gait cycle duration
+                    data[:, 1],  # stance duration
+                    data[:, 2],  # swing duration
+                    data[:, 3],  # double support duration
+                    data[:, 4],  # single support duration
+                ]
+                x_data = np.arange(len(y_data[0]))
+
+            else:
+                raise RuntimeError("graph key not recognized.")
 
             if x_data.shape[0] > 0:
-                if self.initial_time is None:
-                    self.initial_time = x_data[0]
-                x_data -= self.initial_time
+                if key in ["forces", "marker", "tau", "q"]:
+                    if self.initial_time is None:
+                        self.initial_time = x_data[0]
+                    x_data -= self.initial_time
 
-                self.graph_plots[key].set_xdata(x_data)
-                self.graph_plots[key].set_ydata(y_data)
+                for i_data, data in enumerate(y_data):
+                    self.graph_plots[key].set_xdata(x_data)
+                    self.graph_plots[key][i_data].set_ydata(data)
                 # self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
 
         # Draw all the plots now
@@ -1914,10 +1915,14 @@ class Interface(QMainWindow):
     def create_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
         self.figure.clear()
+        colors = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple"]
 
         # Check selected graphs
-        self.which_data_to_plot = {key: checkbox.isChecked() for key, checkbox in self.checkboxes_graphs.items()}
-        count = sum(self.which_data_to_plot.values())
+        count = 0
+        for key in self.which_data_to_plotc.keys():
+            is_checked = self.checkboxes_graphs[key].isChecked()
+            self.which_data_to_plot[key]["active"] = is_checked
+            count += 1 if is_checked else 0
 
         if count == 0:
             # Nothing to display
@@ -1930,7 +1935,8 @@ class Interface(QMainWindow):
         subplot_index = 1
 
         # Affichage des graphiques en fonction des cases à cocher
-        for key, is_checked in self.which_data_to_plot.items():
+        for key in self.which_data_to_plot.keys():
+            is_checked = self.which_data_to_plot[key]["active"]
             if is_checked:
                 # Ajouter un sous-graphe pour chaque graphique sélectionné
                 ax = self.figure.add_subplot(rows, cols, subplot_index)
@@ -1945,9 +1951,13 @@ class Interface(QMainWindow):
                     ax.set_ylim(-800, 800)
                 elif "q" in key:
                     ax.set_ylim(-180, 180)
+                # TODO: add gait parameters
 
                 self.graph_axes[key] = ax
-                self.graph_plots[key] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color="tab:red")[0]
+                if key not in self.graph_plots:
+                    self.graph_plots[key] = [[] for _ in range(self.which_data_to_plot[key]["nb_lines"])]
+                for i_plot in range(self.which_data_to_plot[key]["nb_lines"]):
+                    self.graph_plots[key][i_plot] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color=colors[i_plot])[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
