@@ -130,7 +130,6 @@ def get_new_indices(timestamps, processed_frame_timestamps, print_option=False):
         new_indices = [i for i, time in enumerate(timestamps) if time not in processed_frame_timestamps]
         new_timestamps = [time for time in timestamps if time not in processed_frame_timestamps]
         new_timestamps = np.array(new_timestamps)
-        new_indices = np.array(new_indices)
 
         if print_option:
             if len(processed_frame_timestamps) > 0:
@@ -228,7 +227,7 @@ def nan_filtfilt(b, a, data):
     return filtered
 
 
-def data_filter(self, data, order, sampling_rate, cutoff_freq):
+def data_filter(data, order, sampling_rate, cutoff_freq):
     nyquist = 0.5 * sampling_rate
     normal_cutoff = cutoff_freq / nyquist
     b, a = butter(order, normal_cutoff, btype="low")
@@ -375,250 +374,250 @@ class DataReceiver:
         self.wait()
 
 
-class DataProcessor:
-    """Traite les données pour calculer les angles et moments articulaires"""
-
-    def __init__(self):
-        super().__init__()
-        self.running = True
-        self.processed_frame_timestamps = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
-        self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
-        self.processing_complete = "Not initialized"
-        self.cycle_counter = 0  # For the detection of cycles
-        self.cycle_idx = 0  # For the treatment of the cycles
-        self.cycle_start_id = None
-
-    def start_processing(self):
-        global PROCESS_ID_IK, IS_REDIS_CONNECTED
-        self.running = True
-
-        while self.running:
-            try:
-                if IS_REDIS_CONNECTED and PROCESS_ID_IK:
-                    self.process()
-                    self.processing_complete = "Processing complete"
-
-                # Without the sleep, the Interface is way less responsive (but the whole computer is not slowed)
-                time.sleep(0.1)  # Réduire la fréquence de traitement
-            except Exception as e:
-                logging.error(f"Erreur dans DataProcessor: {e}")
-                time.sleep(1)
-
-    def identify_cycle_start(self, force_filtered):
-        # print("Identifying cycle start...")
-        current_cycle_idx = np.ones((force_filtered.shape[1],)) * self.cycle_counter
-
-        right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * MASS * 9.81
-        right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
-        heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
-        toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
-
-        if 1 in heel_strike_idx:
-            heel_strike_idx = heel_strike_idx[heel_strike_idx != 1]
-
-        # Identification : OK
-        # plt.figure()
-        # plt.plot(force_filtered[2, :])
-        # for frame in heel_strike_idx:
-        #     plt.axvline(x=frame, color='red', linestyle='--', label='Heel Strike')
-        # for frame in toe_off_idx:
-        #     plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
-        # plt.savefig("cycle_identification.png")
-        # plt.show()
-
-        for i_cycle in range(heel_strike_idx.shape[0]):
-            self.cycle_counter += 1
-            if heel_strike_idx.shape[0] > i_cycle + 1:
-                current_cycle_idx[heel_strike_idx[i_cycle] : heel_strike_idx[i_cycle + 1]] = self.cycle_counter
-            else:
-                current_cycle_idx[heel_strike_idx[i_cycle] :] = self.cycle_counter
-
-        return heel_strike_idx
-
-    def process(self):
-        try:
-            global MODEL
-
-            timestamps_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
-            new_indices, new_frame_timestamps = get_new_indices(timestamps_all, self.processed_frame_timestamps, print_option=False)
-
-            if new_frame_timestamps.shape[0] > 50:
-                forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
-                forces_all = np.array(forces_all).transpose(1, 2, 0)
-                mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
-                mks_all = np.array(mks_all).transpose(1, 2, 0)
-                mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)][0]
-
-                if mks_all.shape[2] != len(timestamps_all) or forces_all.shape[2] != len(timestamps_all):
-                    # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
-                    # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
-                    # In this case, it is better to wait for the next frame to move forward with the processing.
-                    return
-
-                if mks_all.shape[0] != 16 or len(mks_name) != 16 or MODEL.nbMarkers() != 16:
-                    raise RuntimeError("The model used or the labeled markers are not from the 16 markerset.")
-
-                forces = forces_all[:, :, new_indices]
-                force_filtered_R = data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
-
-                heel_strike_idx = self.identify_cycle_start(force_filtered_R)
-
-                if heel_strike_idx.shape[0] > 0:
-                    if self.cycle_start_id is None:
-                        # We skip on purpose everything before the first heel strike is detected
-                        self.cycle_start_id = str(new_frame_timestamps[heel_strike_idx[0]])
-                        # print("initialization : start id = ", self.cycle_start_id)
-                        self.processed_frame_timestamps.extend(new_frame_timestamps[: heel_strike_idx[0]])
-                    else:
-                        cycle_stop_id = str(new_frame_timestamps[heel_strike_idx[0]])
-
-                        # Récupérer les données pour ce cycle uniquement
-                        if self.cycle_start_id not in timestamps_all:
-                            logging.info(
-                                f"Cycle start ID {self.cycle_start_id} not found in all frame IDs. "
-                                f"Skipping this cycle."
-                            )
-                            self.cycle_start_id = None
-                            return
-                        cycle_start_idx = timestamps_all.index(self.cycle_start_id)
-                        cycle_stop_idx = timestamps_all.index(cycle_stop_id)
-
-                        idx = 0
-                        while cycle_stop_idx - cycle_start_idx < 30:
-                            idx += 1
-                            if len(heel_strike_idx) > idx + 1:
-                                cycle_stop_id = str(new_frame_timestamps[heel_strike_idx[idx]])
-                                cycle_stop_idx = timestamps_all.index(cycle_stop_id)
-                                # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
-                            else:
-                                # logging.info("Cycle trop court, pas de traitement.")
-                                self.cycle_start_id = None
-                                return
-
-                        # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
-                        # print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
-                        print("cycle idx : ", self.cycle_idx)
-
-                        mks = mks_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
-                        forces = forces_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
-                        timestamps = timestamps_all[cycle_start_idx : cycle_stop_idx + 1]
-
-                        if MODEL is not None:
-                            # print("Calcul IK/ID...")
-
-                            q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
-                            if q is not None:
-                                tau, force_filtered = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
-
-                                gait_parameters = compute_gait_parameters(
-                                    timestamps, force_filtered, mks, mks_name
-                                )
-
-                                # print("q envoyé: ", q.shape)
-                                q = q.tolist()
-                                qdot = qdot.tolist()
-                                qddot = qddot.tolist()
-                                if tau is not None:
-                                    tau = tau.tolist()
-
-                            else:
-                                tau = None
-                                gait_parameters = [None, None, None, None, None]
-
-                            # Stocker les résultats dans Redis
-                            # Stocker l'indice dans une liste séparée pour suivre l'ordre
-                            safe_redis_operation(redis_client.rpush, "cycle_idx", self.cycle_idx)
-                            safe_redis_operation(redis_client.ltrim, "cycle_idx", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q))
-                            safe_redis_operation(redis_client.ltrim, "q", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot))
-                            safe_redis_operation(redis_client.ltrim, "qdot", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot))
-                            safe_redis_operation(redis_client.ltrim, "qddot", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau))
-                            safe_redis_operation(redis_client.ltrim, "tau", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
-                            safe_redis_operation(redis_client.ltrim, "gait_parameters", -CYCLE_BUFFER_LENGTH, -1)
-
-                            # Also add again the original data split by cycle
-                            safe_redis_operation(redis_client.rpush, "mks_cycle", json.dumps(mks.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "mks_cycle", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "forces_cycle", json.dumps(forces.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "forces_cycle", -CYCLE_BUFFER_LENGTH, -1)
-
-                            safe_redis_operation(redis_client.rpush, "timestamps_cycle", json.dumps(timestamps.tolist()))
-                            safe_redis_operation(redis_client.ltrim, "timestamps_cycle", -CYCLE_BUFFER_LENGTH, -1)
-
-                        self.cycle_start_id = cycle_stop_id
-                        self.processed_frame_timestamps.extend(timestamps_all[cycle_start_idx : cycle_stop_idx + 1])
-                        self.cycle_idx += 1
-
-        except Exception as e:
-            logging.error(f"Erreur lors du traitement des données: {e}")
-
-    def inverse_kinematics(self, model: biorbd.Model, mks, labels, time):
-        try:
-            marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
-            index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
-            mks_to_filter = mks[index_in_c3d[index_in_c3d >= 0], :3, :].transpose(1, 0, 2)
-
-            # Apply the filter to each coordinate (x, y, z) over time
-            smoothed_mks = data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
-
-            # Store the result
-            ik = biorbd.InverseKinematics(model, smoothed_mks)
-            ik.solve(method="trf")
-            q = ik.q
-            q = data_filter(q, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
-            qdot = finite_diff(q, time)
-            qddot = finite_diff(qdot, time)
-            return q, qdot, qddot
-        except Exception as e:
-            logging.error(f"Erreur dans inverse_kinematics: {e}")
-            return None, None, None
-
-    def inverse_dynamics(self, model: biorbd.Model, force, q, qdot, qddot):
-        try:
-            num_contacts = len(force)
-            num_frames = force[0].shape[1]
-            platform_origin = [[0.78485, 0.7825, 0.0], [0.78485, 0.2385, 0.0]]
-            force_filtered = np.zeros((num_contacts, 3, num_frames))
-            moment_filtered = np.zeros((num_contacts, 3, num_frames))
-            tau_data = np.zeros((model.nbQ(), num_frames))
-
-            for contact_idx in range(num_contacts):
-                force_filtered[contact_idx] = data_filter(force[contact_idx][0:3], 2, MARKER_FREQUENCY, 10)
-                moment_filtered[contact_idx] = data_filter(force[contact_idx][3:6], 4, MARKER_FREQUENCY, 10)
-
-            for i in range(num_frames):
-                ext_load = model.externalForceSet()
-                for contact_idx in range(num_contacts):
-                    fz = force_filtered[contact_idx, 2, i]
-                    if fz > 30:
-                        force_vec = force_filtered[contact_idx, :, i]
-                        moment_vec = moment_filtered[contact_idx, :, i] / 1000
-                        spatial_vector = np.concatenate((moment_vec, force_vec))
-                        point_app = platform_origin[contact_idx]
-                        segment_name = "LFoot" if contact_idx == 0 else "RFoot"
-                        ext_load.add(biorbd.String(segment_name), spatial_vector, np.array(point_app))
-
-                tau = model.InverseDynamics(q[:, i], qdot[:, i], qddot[:, i], ext_load)
-                tau_data[:, i] = tau.to_array()
-
-            return tau_data, force_filtered
-        except Exception as e:
-            logging.error(f"Erreur dans inverse_dynamics: {e}")
-            return None
-
-    def stop(self):
-        self.running = False
-        self.wait()
+# class DataProcessor:
+#     """Traite les données pour calculer les angles et moments articulaires"""
+#
+#     def __init__(self):
+#         super().__init__()
+#         self.running = True
+#         self.processed_frame_timestamps = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
+#         self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
+#         self.processing_complete = "Not initialized"
+#         self.cycle_counter = 0  # For the detection of cycles
+#         self.cycle_idx = 0  # For the treatment of the cycles
+#         self.cycle_start_id = None
+#
+#     def start_processing(self):
+#         global PROCESS_ID_IK, IS_REDIS_CONNECTED
+#         self.running = True
+#
+#         while self.running:
+#             try:
+#                 if IS_REDIS_CONNECTED and PROCESS_ID_IK:
+#                     self.process()
+#                     self.processing_complete = "Processing complete"
+#
+#                 # Without the sleep, the Interface is way less responsive (but the whole computer is not slowed)
+#                 time.sleep(0.1)  # Réduire la fréquence de traitement
+#             except Exception as e:
+#                 logging.error(f"Erreur dans DataProcessor: {e}")
+#                 time.sleep(1)
+#
+#     def identify_cycle_start(self, force_filtered):
+#         # print("Identifying cycle start...")
+#         current_cycle_idx = np.ones((force_filtered.shape[1],)) * self.cycle_counter
+#
+#         right_foot_on_ground_idx = force_filtered[2, :] > FORCE_MIN_THRESHOLD * MASS * 9.81
+#         right_foot_on_ground_idx = np.astype(right_foot_on_ground_idx, int)
+#         heel_strike_idx = np.where(np.diff(right_foot_on_ground_idx) == 1)[0] + 1
+#         toe_off_idx = np.where(np.diff(right_foot_on_ground_idx) == -1)[0] + 1
+#
+#         if 1 in heel_strike_idx:
+#             heel_strike_idx = heel_strike_idx[heel_strike_idx != 1]
+#
+#         # Identification : OK
+#         # plt.figure()
+#         # plt.plot(force_filtered[2, :])
+#         # for frame in heel_strike_idx:
+#         #     plt.axvline(x=frame, color='red', linestyle='--', label='Heel Strike')
+#         # for frame in toe_off_idx:
+#         #     plt.axvline(x=frame, color='green', linestyle='--', label='Toe Off')
+#         # plt.savefig("cycle_identification.png")
+#         # plt.show()
+#
+#         for i_cycle in range(heel_strike_idx.shape[0]):
+#             self.cycle_counter += 1
+#             if heel_strike_idx.shape[0] > i_cycle + 1:
+#                 current_cycle_idx[heel_strike_idx[i_cycle] : heel_strike_idx[i_cycle + 1]] = self.cycle_counter
+#             else:
+#                 current_cycle_idx[heel_strike_idx[i_cycle] :] = self.cycle_counter
+#
+#         return heel_strike_idx
+#
+#     def process(self):
+#         try:
+#             global MODEL
+#
+#             timestamps_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
+#             new_indices, new_frame_timestamps = get_new_indices(timestamps_all, self.processed_frame_timestamps, print_option=False)
+#
+#             if new_frame_timestamps.shape[0] > 50:
+#                 forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
+#                 forces_all = np.array(forces_all).transpose(1, 2, 0)
+#                 mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
+#                 mks_all = np.array(mks_all).transpose(1, 2, 0)
+#                 mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)][0]
+#
+#                 if mks_all.shape[2] != len(timestamps_all) or forces_all.shape[2] != len(timestamps_all):
+#                     # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
+#                     # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
+#                     # In this case, it is better to wait for the next frame to move forward with the processing.
+#                     return
+#
+#                 if mks_all.shape[0] != 16 or len(mks_name) != 16 or MODEL.nbMarkers() != 16:
+#                     raise RuntimeError("The model used or the labeled markers are not from the 16 markerset.")
+#
+#                 forces = forces_all[:, :, new_indices]
+#                 force_filtered_R = data_filter(forces[0, 0:3, :], 2, MARKER_FREQUENCY, 10)
+#
+#                 heel_strike_idx = self.identify_cycle_start(force_filtered_R)
+#
+#                 if heel_strike_idx.shape[0] > 0:
+#                     if self.cycle_start_id is None:
+#                         # We skip on purpose everything before the first heel strike is detected
+#                         self.cycle_start_id = str(new_frame_timestamps[heel_strike_idx[0]])
+#                         # print("initialization : start id = ", self.cycle_start_id)
+#                         self.processed_frame_timestamps.extend(new_frame_timestamps[: heel_strike_idx[0]])
+#                     else:
+#                         cycle_stop_id = str(new_frame_timestamps[heel_strike_idx[0]])
+#
+#                         # Récupérer les données pour ce cycle uniquement
+#                         if self.cycle_start_id not in timestamps_all:
+#                             logging.info(
+#                                 f"Cycle start ID {self.cycle_start_id} not found in all frame IDs. "
+#                                 f"Skipping this cycle."
+#                             )
+#                             self.cycle_start_id = None
+#                             return
+#                         cycle_start_idx = timestamps_all.index(self.cycle_start_id)
+#                         cycle_stop_idx = timestamps_all.index(cycle_stop_id)
+#
+#                         idx = 0
+#                         while cycle_stop_idx - cycle_start_idx < 30:
+#                             idx += 1
+#                             if len(heel_strike_idx) > idx + 1:
+#                                 cycle_stop_id = str(new_frame_timestamps[heel_strike_idx[idx]])
+#                                 cycle_stop_idx = timestamps_all.index(cycle_stop_id)
+#                                 # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
+#                             else:
+#                                 # logging.info("Cycle trop court, pas de traitement.")
+#                                 self.cycle_start_id = None
+#                                 return
+#
+#                         # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
+#                         # print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
+#                         print("cycle idx : ", self.cycle_idx)
+#
+#                         mks = mks_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
+#                         forces = forces_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
+#                         timestamps = timestamps_all[cycle_start_idx : cycle_stop_idx + 1]
+#
+#                         if MODEL is not None:
+#                             # print("Calcul IK/ID...")
+#
+#                             q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
+#                             if q is not None:
+#                                 tau, force_filtered = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
+#
+#                                 gait_parameters = compute_gait_parameters(
+#                                     timestamps, force_filtered, mks, mks_name
+#                                 )
+#
+#                                 # print("q envoyé: ", q.shape)
+#                                 q = q.tolist()
+#                                 qdot = qdot.tolist()
+#                                 qddot = qddot.tolist()
+#                                 if tau is not None:
+#                                     tau = tau.tolist()
+#
+#                             else:
+#                                 tau = None
+#                                 gait_parameters = [None, None, None, None, None]
+#
+#                             # Stocker les résultats dans Redis
+#                             # Stocker l'indice dans une liste séparée pour suivre l'ordre
+#                             safe_redis_operation(redis_client.rpush, "cycle_idx", self.cycle_idx)
+#                             safe_redis_operation(redis_client.ltrim, "cycle_idx", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "q", json.dumps(q))
+#                             safe_redis_operation(redis_client.ltrim, "q", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot))
+#                             safe_redis_operation(redis_client.ltrim, "qdot", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot))
+#                             safe_redis_operation(redis_client.ltrim, "qddot", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau))
+#                             safe_redis_operation(redis_client.ltrim, "tau", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
+#                             safe_redis_operation(redis_client.ltrim, "gait_parameters", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             # Also add again the original data split by cycle
+#                             safe_redis_operation(redis_client.rpush, "mks_cycle", json.dumps(mks.tolist()))
+#                             safe_redis_operation(redis_client.ltrim, "mks_cycle", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "forces_cycle", json.dumps(forces.tolist()))
+#                             safe_redis_operation(redis_client.ltrim, "forces_cycle", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                             safe_redis_operation(redis_client.rpush, "timestamps_cycle", json.dumps(timestamps.tolist()))
+#                             safe_redis_operation(redis_client.ltrim, "timestamps_cycle", -CYCLE_BUFFER_LENGTH, -1)
+#
+#                         self.cycle_start_id = cycle_stop_id
+#                         self.processed_frame_timestamps.extend(timestamps_all[cycle_start_idx : cycle_stop_idx + 1])
+#                         self.cycle_idx += 1
+#
+#         except Exception as e:
+#             logging.error(f"Erreur lors du traitement des données: {e}")
+#
+#     def inverse_kinematics(self, model: biorbd.Model, mks, labels, time):
+#         try:
+#             marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
+#             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
+#             mks_to_filter = mks[index_in_c3d[index_in_c3d >= 0], :3, :].transpose(1, 0, 2)
+#
+#             # Apply the filter to each coordinate (x, y, z) over time
+#             smoothed_mks = data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
+#
+#             # Store the result
+#             ik = biorbd.InverseKinematics(model, smoothed_mks)
+#             ik.solve(method="trf")
+#             q = ik.q
+#             q = data_filter(q, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
+#             qdot = finite_diff(q, time)
+#             qddot = finite_diff(qdot, time)
+#             return q, qdot, qddot
+#         except Exception as e:
+#             logging.error(f"Erreur dans inverse_kinematics: {e}")
+#             return None, None, None
+#
+#     def inverse_dynamics(self, model: biorbd.Model, force, q, qdot, qddot):
+#         try:
+#             num_contacts = len(force)
+#             num_frames = force[0].shape[1]
+#             platform_origin = [[0.78485, 0.7825, 0.0], [0.78485, 0.2385, 0.0]]
+#             force_filtered = np.zeros((num_contacts, 3, num_frames))
+#             moment_filtered = np.zeros((num_contacts, 3, num_frames))
+#             tau_data = np.zeros((model.nbQ(), num_frames))
+#
+#             for contact_idx in range(num_contacts):
+#                 force_filtered[contact_idx] = data_filter(force[contact_idx][0:3], 2, MARKER_FREQUENCY, 10)
+#                 moment_filtered[contact_idx] = data_filter(force[contact_idx][3:6], 4, MARKER_FREQUENCY, 10)
+#
+#             for i in range(num_frames):
+#                 ext_load = model.externalForceSet()
+#                 for contact_idx in range(num_contacts):
+#                     fz = force_filtered[contact_idx, 2, i]
+#                     if fz > 30:
+#                         force_vec = force_filtered[contact_idx, :, i]
+#                         moment_vec = moment_filtered[contact_idx, :, i] / 1000
+#                         spatial_vector = np.concatenate((moment_vec, force_vec))
+#                         point_app = platform_origin[contact_idx]
+#                         segment_name = "LFoot" if contact_idx == 0 else "RFoot"
+#                         ext_load.add(biorbd.String(segment_name), spatial_vector, np.array(point_app))
+#
+#                 tau = model.InverseDynamics(q[:, i], qdot[:, i], qddot[:, i], ext_load)
+#                 tau_data[:, i] = tau.to_array()
+#
+#             return tau_data, force_filtered
+#         except Exception as e:
+#             logging.error(f"Erreur dans inverse_dynamics: {e}")
+#             return None
+#
+#     def stop(self):
+#         self.running = False
+#         self.wait()
 
 class QProcessor:
     """Traite les données pour calculer les angles et moments articulaires"""
@@ -640,7 +639,7 @@ class QProcessor:
                     self.processing_complete = "Processing complete"
 
                 # Without the sleep, the Interface is way less responsive (but the whole computer is not slowed)
-                time.sleep(0.1)  # Réduire la fréquence de traitement
+                time.sleep(0.05)  # Réduire la fréquence de traitement
             except Exception as e:
                 logging.error(f"Erreur dans QProcessor: {e}")
                 time.sleep(1)
@@ -653,13 +652,14 @@ class QProcessor:
             new_indices, new_frame_timestamps = get_new_indices(timestamps_all,
                                                                         self.processed_frame_timestamps,
                                                                         print_option=False)
+            timestamps_all = np.array(timestamps_all)
 
             if new_frame_timestamps.shape[0] > 0:
                 mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
                 mks_all = np.array(mks_all).transpose(1, 2, 0)
                 mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)][0]
 
-                if mks_all.shape[2] != len(timestamps_all):
+                if mks_all.shape[2] != timestamps_all.shape[0]:
                     # logging.info("Les données de mks et forces ne correspondent pas au nombre d'IDs de frame.")
                     # If we are gathering the data, at the same time as it is written, we might have inconsistent shapes.
                     # In this case, it is better to wait for the next frame to move forward with the processing.
@@ -678,13 +678,13 @@ class QProcessor:
 
                     q = self.inverse_kinematics(MODEL, mks, mks_name)
                     if q is not None:
-                        q = q.tolist()
+                        nb_frames = q.shape[1]
+                        for i_frame in range(nb_frames):
+                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q[:, i_frame].tolist()))
+                            safe_redis_operation(redis_client.ltrim, "q", -FRAME_BUFFER_LENGTH, -1)
 
-                    safe_redis_operation(redis_client.rpush, "q", json.dumps(q))
-                    safe_redis_operation(redis_client.ltrim, "q", -CYCLE_BUFFER_LENGTH, -1)
-
-                    safe_redis_operation(redis_client.rpush, "timestamp_q", json.dumps(timestamps_q))
-                    safe_redis_operation(redis_client.ltrim, "timestamp_q", -CYCLE_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.rpush, "timestamps_q", json.dumps(timestamps_q[i_frame].tolist()))
+                            safe_redis_operation(redis_client.ltrim, "timestamps_q", -FRAME_BUFFER_LENGTH, -1)
 
                 self.processed_frame_timestamps.extend(new_frame_timestamps)
 
@@ -695,16 +695,12 @@ class QProcessor:
         try:
             marker_names = tuple(n.to_string() for n in MODEL.technicalMarkerNames())
             index_in_c3d = np.array(tuple(labels.index(name) if name in labels else -1 for name in marker_names))
-            mks_to_filter = mks[index_in_c3d[index_in_c3d >= 0], :3, :].transpose(1, 0, 2)
-
-            # Apply the filter to each coordinate (x, y, z) over time
-            smoothed_mks = data_filter(data=mks_to_filter, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
+            markers_reordered = mks[index_in_c3d[index_in_c3d >= 0], :3, :].transpose(1, 0, 2)
 
             # Store the result
-            ik = biorbd.InverseKinematics(model, smoothed_mks)
+            ik = biorbd.InverseKinematics(model, markers_reordered)
             ik.solve(method="trf")
             q = ik.q
-            q = data_filter(q, cutoff_freq=10, sampling_rate=MARKER_FREQUENCY, order=4)
             return q
         except Exception as e:
             logging.error(f"Erreur dans inverse_kinematics Q: {e}")
@@ -2141,36 +2137,53 @@ class Interface(QMainWindow):
                         x_data = np.concatenate((x_data, np.array([x_data[-1] + 1 / MARKER_FREQUENCY])))
 
             elif key in ["tau", "q"]:
-                data_l = None
+                # data_l = None
+                # if key == "tau":
+                #     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+                # elif key == "q":
+                #     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
+                #
+                # time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_cycle", 0, -1)]
+                #
+                # if len(time_vectors) != len(data_l):
+                #     continue  # timestamps_cycle has not been uploaded to the database yet
+                #
+                # nb_dof = MODEL.nbQ()
+                # data = np.empty((nb_dof, 0))
+                # x_data = np.empty((0, ))
+                # for i_cycle in range(len(data_l)):
+                #     if data_l[i_cycle] is not None:
+                #         nb_frames_this_cycle = len(data_l[i_cycle][0])
+                #         data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
+                #         for i_dof in range(nb_dof):
+                #             data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
+                #         data = np.concatenate((data, data_this_cycle), axis=1)
+                #         x_data = np.concatenate((x_data, time_vectors[i_cycle]))
+                #
+                #         if self.initial_time is not None:
+                #             self.graph_axes[key].plot(
+                #                 np.array([time_vectors[i_cycle][-1] - self.initial_time, time_vectors[i_cycle][-1] - self.initial_time]),
+                #                 np.array([-1000, 1000]),
+                #                 "--",
+                #                 color="black",
+                #             )
+
                 if key == "tau":
-                    data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+                    x_data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_tau", 0, -1)]
                 elif key == "q":
-                    data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
+                    x_data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_q", 0, -1)]
+                else:
+                    raise RuntimeError("key not recognized")
 
-                time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_cycle", 0, -1)]
+                if data == []:
+                    continue
 
-                if len(time_vectors) != len(data_l):
-                    continue  # timestamps_cycle has not been uploaded to the database yet
-
-                nb_dof = MODEL.nbQ()
-                data = np.empty((nb_dof, 0))
-                x_data = np.empty((0, ))
-                for i_cycle in range(len(data_l)):
-                    if data_l[i_cycle] is not None:
-                        nb_frames_this_cycle = len(data_l[i_cycle][0])
-                        data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
-                        for i_dof in range(nb_dof):
-                            data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
-                        data = np.concatenate((data, data_this_cycle), axis=1)
-                        x_data = np.concatenate((x_data, time_vectors[i_cycle]))
-
-                        if self.initial_time is not None:
-                            self.graph_axes[key].plot(
-                                np.array([time_vectors[i_cycle][-1] - self.initial_time, time_vectors[i_cycle][-1] - self.initial_time]),
-                                np.array([-1000, 1000]),
-                                "--",
-                                color="black",
-                            )
+                data = np.array(data).T
+                x_data = np.array(x_data)
+                if x_data.shape[0] != data.shape[1]:
+                    continue  # timestamps have not been uploaded to the database yet
 
                 if key == "q":
                     data = data * 180 / np.pi
