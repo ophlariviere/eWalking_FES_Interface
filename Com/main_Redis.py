@@ -368,7 +368,7 @@ class DataProcessor:
                     if self.cycle_start_id is None:
                         # We skip on purpose everything before the first heel strike is detected
                         self.cycle_start_id = str(new_frame_ids[heel_strike_idx[0]])
-                        print("initialization : start id = ", self.cycle_start_id)
+                        # print("initialization : start id = ", self.cycle_start_id)
                         self.processed_frame_ids.extend(new_frame_ids[: heel_strike_idx[0]])
                     else:
                         cycle_stop_id = str(new_frame_ids[heel_strike_idx[0]])
@@ -390,15 +390,14 @@ class DataProcessor:
                             if len(heel_strike_idx) > idx + 1:
                                 cycle_stop_id = str(new_frame_ids[heel_strike_idx[idx]])
                                 cycle_stop_idx = all_frame_ids.index(cycle_stop_id)
-                                print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
+                                # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
                             else:
-                                logging.info("Cycle trop court, pas de traitement.")
-                                print(heel_strike_idx)
+                                # logging.info("Cycle trop court, pas de traitement.")
                                 self.cycle_start_id = None
                                 return
 
-                        print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
-                        print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
+                        # print("start id: ", self.cycle_start_id, " / stop id: ", cycle_stop_id)
+                        # print("start idx: ", cycle_start_idx, " / stop idx: ", cycle_stop_idx)
                         print("cycle idx : ", self.cycle_idx)
 
                         mks = mks_all[:, :, cycle_start_idx : cycle_stop_idx + 1]
@@ -406,46 +405,55 @@ class DataProcessor:
                         timestamps = timestamps[cycle_start_idx : cycle_stop_idx + 1]
 
                         if MODEL is not None:
-                            print("Calcul IK/ID...")
+                            # print("Calcul IK/ID...")
 
                             q, qdot, qddot = self.inverse_kinematics(MODEL, mks, mks_name, timestamps)
-                            tau, force_filtered = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
+                            if q is not None:
+                                tau, force_filtered = self.inverse_dynamics(MODEL, forces, q, qdot, qddot)
 
-                            print("before")
-                            gait_parameters = self.compute_gait_parameters(
-                                timestamps, force_filtered, mks, mks_name
-                            )
+                                gait_parameters = compute_gait_parameters(
+                                    timestamps, force_filtered, mks, mks_name
+                                )
 
-                            print("q envoyé: ", q.shape)
+                                # print("q envoyé: ", q.shape)
+                                q = q.tolist()
+                                qdot = qdot.tolist()
+                                qddot = qddot.tolist()
+                                if tau is not None:
+                                    tau = tau.tolist()
+
+                            else:
+                                tau = None
+                                gait_parameters = [None, None, None, None, None]
 
                             # Stocker les résultats dans Redis
                             # Stocker l'indice dans une liste séparée pour suivre l'ordre
                             safe_redis_operation(redis_client.rpush, "cycle_idx", self.cycle_idx)
                             safe_redis_operation(redis_client.ltrim, "cycle_idx", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q.tolist()))
+                            safe_redis_operation(redis_client.rpush, "q", json.dumps(q))
                             safe_redis_operation(redis_client.ltrim, "q", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot.tolist()))
+                            safe_redis_operation(redis_client.rpush, "qdot", json.dumps(qdot))
                             safe_redis_operation(redis_client.ltrim, "qdot", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot.tolist()))
+                            safe_redis_operation(redis_client.rpush, "qddot", json.dumps(qddot))
                             safe_redis_operation(redis_client.ltrim, "qddot", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau.tolist()))
+                            safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau))
                             safe_redis_operation(redis_client.ltrim, "tau", -CYCLE_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
                             safe_redis_operation(redis_client.ltrim, "gait_parameters", -CYCLE_BUFFER_LENGTH, -1)
 
                             # Also add again the original data split by cycle
-                            safe_redis_operation(redis_client.rpush, "mks_cycle", json.dumps(mks))
+                            safe_redis_operation(redis_client.rpush, "mks_cycle", json.dumps(mks.tolist()))
                             safe_redis_operation(redis_client.ltrim, "mks_cycle", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "forces_cycle", json.dumps(forces))
+                            safe_redis_operation(redis_client.rpush, "forces_cycle", json.dumps(forces.tolist()))
                             safe_redis_operation(redis_client.ltrim, "forces_cycle", -CYCLE_BUFFER_LENGTH, -1)
 
-                            safe_redis_operation(redis_client.rpush, "timestamps_cycle", json.dumps(timestamps))
+                            safe_redis_operation(redis_client.rpush, "timestamps_cycle", json.dumps(timestamps.tolist()))
                             safe_redis_operation(redis_client.ltrim, "timestamps_cycle", -CYCLE_BUFFER_LENGTH, -1)
 
                         self.cycle_start_id = cycle_stop_id
@@ -1290,7 +1298,7 @@ class Interface(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Système de Stimulation Neuromusculaire")
-        self.setMinimumSize(1000, 900)
+        self.setMinimumSize(1500, 1000)
         self.channel_inputs = {}
         self.num_config = 0
         self.do_look_need_send_stim = False
@@ -1892,24 +1900,30 @@ class Interface(QMainWindow):
                 elif key == "q":
                     data_l = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
 
-                time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp_cycle", 0, -1)]
+                time_vectors = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_cycle", 0, -1)]
+
+                if len(time_vectors) != len(data_l):
+                    continue  # timestamps_cycle has not been uploaded to the database yet
 
                 nb_dof = MODEL.nbQ()
                 data = np.empty((nb_dof, 0))
                 x_data = np.empty((0, ))
                 for i_cycle in range(len(data_l)):
-                    nb_frames_this_cycle = len(data_l[i_cycle][0])
-                    data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
-                    for i_dof in range(nb_dof):
-                        data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
-                    data = np.concatenate((data, data_this_cycle), axis=1)
-                    x_data = np.concatenate((x_data, time_vectors[i_cycle]))
-                    self.graph_axes[key].plot(
-                        np.array([data.shape[1] - 1, data.shape[1] - 1]),
-                        np.array([-1000, 1000]),
-                        "--",
-                        color="tab:black",
-                    )
+                    if data_l[i_cycle] is not None:
+                        nb_frames_this_cycle = len(data_l[i_cycle][0])
+                        data_this_cycle = np.empty((nb_dof, nb_frames_this_cycle))
+                        for i_dof in range(nb_dof):
+                            data_this_cycle[i_dof, :] = data_l[i_cycle][i_dof]
+                        data = np.concatenate((data, data_this_cycle), axis=1)
+                        x_data = np.concatenate((x_data, time_vectors[i_cycle]))
+
+                        if self.initial_time is not None:
+                            self.graph_axes[key].plot(
+                                np.array([time_vectors[i_cycle][-1] - self.initial_time, time_vectors[i_cycle][-1] - self.initial_time]),
+                                np.array([-1000, 1000]),
+                                "--",
+                                color="black",
+                            )
 
                 if key == "q":
                     data = data * 180 / np.pi
@@ -1920,7 +1934,7 @@ class Interface(QMainWindow):
 
             elif key == "gait_params" or key == "stim_params" or key == "cost":
                 if key == "gait_params":
-                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_params", 0, -1)]
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_parameters", 0, -1)]
                 elif key == "stim_params":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("stimulation_parameters", 0, -1)]
                 elif key == "cost":
@@ -1946,12 +1960,12 @@ class Interface(QMainWindow):
                     x_data -= self.initial_time
 
                 for i_data, data in enumerate(y_data):
-                    self.graph_plots[key].set_xdata(x_data)
+                    self.graph_plots[key][i_data].set_xdata(x_data)
                     self.graph_plots[key][i_data].set_ydata(data)
-                # self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
+                self.graph_axes[key].set_xlim((x_data[0], x_data[-1]))
 
-        # Draw all the plots now
-        self.canvas.draw()
+            # Draw all the plots now
+            self.canvas.draw()
 
     def create_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
@@ -1960,7 +1974,7 @@ class Interface(QMainWindow):
 
         # Check selected graphs
         count = 0
-        for key in self.which_data_to_plotc.keys():
+        for key in self.which_data_to_plot.keys():
             is_checked = self.checkboxes_graphs[key].isChecked()
             self.which_data_to_plot[key]["active"] = is_checked
             count += 1 if is_checked else 0
@@ -1984,21 +1998,25 @@ class Interface(QMainWindow):
                 ax.set_xlabel("Time [s]")
                 ax.set_ylabel(key)
                 ax.set_xlim(0, 1)
-                if "force" in key:
-                    ax.set_ylim(-50, 800)
-                elif "marker" in key:
+                linestyle = "-"
+                marker = "None"
+                if key == "forces":
+                    ax.set_ylim(-50, 1000)
+                elif key == "marker":
                     ax.set_ylim(0, 2)
-                elif "tau" in key:
+                elif key == "tau":
                     ax.set_ylim(-800, 800)
-                elif "q" in key:
+                elif key == "q":
                     ax.set_ylim(-180, 180)
-                # TODO: add gait parameters
+                elif key == "gait_params":
+                    ax.set_ylim(0, 2)
+                    marker = "o"
 
                 self.graph_axes[key] = ax
                 if key not in self.graph_plots:
                     self.graph_plots[key] = [[] for _ in range(self.which_data_to_plot[key]["nb_lines"])]
                 for i_plot in range(self.which_data_to_plot[key]["nb_lines"]):
-                    self.graph_plots[key][i_plot] = ax.plot(np.array([0, 0]), np.array([0, 0]), "-", color=colors[i_plot])[0]
+                    self.graph_plots[key][i_plot] = ax.plot(np.array([0, 0]), np.array([0, 0]), linestyle=linestyle, marker=marker, color=colors[i_plot])[0]
                 subplot_index += 1
 
         # Redessiner le canevas pour afficher les nouvelles données
