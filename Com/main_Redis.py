@@ -10,6 +10,8 @@ The Redis database contains
 Note: Always start the interface (this code) before the data server (code on the other computer).
 """
 
+import os
+import  pickle
 import datetime
 import sys
 from enum import Enum
@@ -617,17 +619,17 @@ class BayesianOptimizer:
         # self.processed_frame_ids = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         # self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
-        # self.cycle_counter = 0
+        self.current_iteration = None
         self.current_cycle = None
 
         # Optimization parameters
         # Define the variable bounds
         self.bounds = [
             Real(20, 50, name="R_frequency"),  # Hz
-            Real(8, 20, name="R_intensity"),  # mA
+            Real(10, 20, name="R_intensity"),  # mA
             Real(200, 500, name="R_width"),  # micros
             Real(20, 50, name="L_frequency"),  # Hz
-            Real(8, 20, name="L_intensity"),  # mA
+            Real(10, 20, name="L_intensity"),  # mA
             Real(200, 500, name="L_width"),  # micros
         ]
 
@@ -650,7 +652,7 @@ class BayesianOptimizer:
 
                     # gp_minimize will try to find the minimal value of the objective function.
                     result = gp_minimize(
-                        func=lambda params: self.make_an_iteration(params),
+                        func=lambda stimulation_params: self.make_an_iteration(stimulation_params),
                         dimensions=self.bounds,
                         n_calls=100,  # number of evaluations of f
                         acq_func="LCB",  # "LCB", "EI", "PI", "gp_hedge", "EIps", "PIps"
@@ -715,16 +717,16 @@ class BayesianOptimizer:
 
         return q_mean, qdot_mean, qddot_mean, tau_mean
 
-    def set_stimulation_parameters(self, params):
+    def set_stimulation_parameters(self, stimulation_params):
         global IS_REDIS_CONNECTED
 
         # Current values of the optimized FES parameters
-        R_frequency = params[0]
-        R_intensity = params[1]
-        R_width = params[2]
-        L_frequency = params[3]
-        L_intensity = params[4]
-        L_width = params[5]
+        R_frequency = stimulation_params[0]
+        R_intensity = stimulation_params[1]
+        R_width = stimulation_params[2]
+        L_frequency = stimulation_params[3]
+        L_intensity = stimulation_params[4]
+        L_width = stimulation_params[5]
 
         stimulator_parameters = {}
         stimulator_parameters["1"] = {
@@ -746,7 +748,7 @@ class BayesianOptimizer:
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
                 safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
-                logging.info(f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {params}")
+                logging.info(f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {stimulation_params}")
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
 
@@ -789,11 +791,16 @@ class BayesianOptimizer:
 
         return q, qdot, qddot, tau, gait_parameters
 
-    def make_an_iteration(self, params):
+    def make_an_iteration(self, stimulation_params):
         global START_STIMULATION, STOP_STIMULATOR
 
+        if self.current_iteration is None:
+            self.current_iteration = 0
+        else:
+            self.current_iteration += 1
+
         # Set the parameter values to test this iteration
-        self.set_stimulation_parameters(params)
+        self.set_stimulation_parameters(stimulation_params)
 
         # Stimulate
         START_STIMULATION = True
@@ -852,11 +859,13 @@ class BayesianOptimizer:
         q_mean, qdot_mean, qddot_mean, tau_mean = self.compute_mean_cycle(cycles)
 
         # Compute objective values
-        R_intensity = params[1]
-        L_intensity = params[4]
-        objective_value = self.objective(q_mean, qdot_mean, qddot_mean, tau_mean, R_intensity, L_intensity)
+        R_intensity = stimulation_params[1]
+        L_intensity = stimulation_params[4]
+        total_cost, detailed_cost = self.objective(q_mean, qdot_mean, qddot_mean, tau_mean, R_intensity, L_intensity)
 
-        return objective_value
+        self.save_iteration_data(cycles, q_mean, qdot_mean, qddot_mean, tau_mean, stimulation_params, detailed_cost)
+
+        return total_cost
 
     @staticmethod
     def compute_com_acceleration(model: biorbd.Model, q: np.ndarray, qdot: np.ndarray, qddot: np.ndarray):
@@ -915,12 +924,19 @@ class BayesianOptimizer:
         energy_human = self.compute_energy(qdot, tau, R_intensity, L_intensity, time_vector)
         power_ankle = self.compute_ankle_power(qdot, tau, time_vector)
 
-        return (
-            self.weight_comddot * comddot
-            + self.weight_angular_momentum * angular_momentum
-            + self.weight_enegy * energy_human
-            + self.weight_ankle_power * power_ankle
-        )
+        comddot_cost = self.weight_comddot * comddot
+        angular_momentum_cost = self.weight_angular_momentum * angular_momentum
+        energy_cost = self.weight_enegy * energy_human
+        ankle_power_cost = self.weight_ankle_power * power_ankle
+
+        total_cost = comddot_cost + angular_momentum_cost + energy_cost + ankle_power_cost
+        detailed_cost = [comddot_cost, angular_momentum_cost, energy_cost, ankle_power_cost]
+
+        safe_redis_operation(redis_client.rpush, "cost", json.dumps(detailed_cost))
+        safe_redis_operation(redis_client.ltrim, "cost", -CYCLE_BUFFER_LENGTH, -1)
+
+        return total_cost, detailed_cost
+
 
     def save_optimal_bayesian_parameters(self, result):
         """
@@ -947,6 +963,25 @@ class BayesianOptimizer:
             f.write("Width left = %.4f\n" % result.x[5])
             f.write("\nOptimal cost function value = %.4f\n" % result.fun)
         return
+
+    def save_iteration_data(self, cycles, q_mean, qdot_mean, qddot_mean, tau_mean, stimulation_params, detailed_cost):
+        global SAVE_PATH
+
+        iter_path = SAVE_PATH + "/iterations"
+        if not os.path.exists(iter_path):
+            os.makedirs(iter_path)
+
+        with open(f"{iter_path}/iteration_{self.current_iteration}.pkl", 'wb') as f:
+            data = {
+                "cycles": cycles,
+                "qdq_meanot": q_mean,
+                "qdot_mean": qdot_mean,
+                "qddot_mean": qddot_mean,
+                "tau_mean": tau_mean,
+                "stimulation_params": stimulation_params,
+            }
+            pickle.dump(data, f)
+
 
     def plot_bayesian_optim_results(self, result):
         # TODO
@@ -1268,6 +1303,8 @@ class Interface(QMainWindow):
             "tau": {"active": False, "nb_lines": 3},
             "q": {"active": False, "nb_lines": 3},
             "gait_params": {"active": False, "nb_lines": 5},
+            "stim_params": {"active": False, "nb_lines": 6},
+            "cost": {"active": False, "nb_lines": 4},
         }
         self.graph_axes = {}
         self.graph_plots = {}
@@ -1881,18 +1918,22 @@ class Interface(QMainWindow):
                           data[DOF_CORR["LAnkle"][0], :],
                           data[DOF_CORR["LKnee"][0], :]]
 
-            elif key == "gait_params":
-                data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_params", 0, -1)]
+            elif key == "gait_params" or key == "stim_params" or key == "cost":
+                if key == "gait_params":
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_params", 0, -1)]
+                elif key == "stim_params":
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("stimulation_parameters", 0, -1)]
+                elif key == "cost":
+                    data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("cost", 0, -1)]
+
                 if data == []:
                     continue
+
                 data = np.array(data)
-                y_data = [
-                    data[:, 0],  # gait cycle duration
-                    data[:, 1],  # stance duration
-                    data[:, 2],  # swing duration
-                    data[:, 3],  # double support duration
-                    data[:, 4],  # single support duration
-                ]
+                y_data = []
+                for i_line in range(self.which_data_to_plot[key]["nb_lines"]):
+                    y_data += [data[:, i_line]]
+
                 x_data = np.arange(len(y_data[0]))
 
             else:
@@ -1915,7 +1956,7 @@ class Interface(QMainWindow):
     def create_graphs(self):
         """Updates displayed graphs based on selected checkboxes."""
         self.figure.clear()
-        colors = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple"]
+        colors = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple", "tab:pink"]
 
         # Check selected graphs
         count = 0
