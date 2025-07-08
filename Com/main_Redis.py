@@ -61,7 +61,7 @@ logging.basicConfig(
 )
 
 # Constantes globales
-FRAME_BUFFER_LENGTH = 800
+FRAME_BUFFER_LENGTH = 1000
 CYCLE_BUFFER_LENGTH = 100
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
@@ -229,6 +229,7 @@ def nan_filtfilt(b, a, data):
     i_nan = 0
     while i_nan < len(invalid_idx):
         if invalid_idx[i_nan] == 0:
+            filtered[0] = 0
             i_nan += 1
             continue
         else:
@@ -237,7 +238,7 @@ def nan_filtfilt(b, a, data):
                 break
             else:
                 idx_stop = invalid_idx[i_nan] + 1
-                while idx_stop + 1 in invalid_idx:
+                while idx_stop in invalid_idx:
                     idx_stop += 1
                     i_nan += 1
 
@@ -265,6 +266,9 @@ def data_filter(data, order, sampling_rate, cutoff_freq):
                 filtered_data[i, j, :] = nan_filtfilt(b, a, data[i, j, :])
     else:
         raise ValueError("Data must be 2D or 3D.")
+
+    if np.sum(np.isnan(filtered_data)) > 0:
+        raise RuntimeError("Something went wrong, the filtered data still contains nans.")
 
     return filtered_data
 
@@ -660,7 +664,7 @@ class QProcessor:
                     self.processing_complete = "Processing complete"
 
                 # Without the sleep, the Interface is way less responsive (but the whole computer is not slowed)
-                time.sleep(0.5)  # Réduire la fréquence de traitement
+                time.sleep(0.25)  # Réduire la fréquence de traitement
             except Exception as e:
                 logging.error(f"Erreur dans QProcessor: {e}")
                 time.sleep(1)
@@ -762,16 +766,16 @@ class TauProcessor:
         try:
             global MODEL
 
-            timestamps_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
-            new_indices, new_frame_timestamps = get_new_indices(timestamps_all, self.processed_frame_timestamps, print_option=False)
+            timestamps_q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_q", 0, -1)]
+            timestamps_q_all = np.array(timestamps_q_all)
+            new_indices, new_frame_timestamps = get_new_indices(timestamps_q_all, self.processed_frame_timestamps, print_option=False)
 
             if new_frame_timestamps.shape[0] > 0:
                 forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
                 forces_all = np.array(forces_all).transpose(1, 2, 0)
                 q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
                 q_all = np.array(q_all).T
-                timestamps_q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_q", 0, -1)]
-                timestamps_q_all = np.array(timestamps_q_all)
+                timestamps_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
 
                 if q_all.shape[1] != timestamps_q_all.shape[0]:
                     # logging.info("Les données de q ne correspondent pas au nombre d'IDs de frame.")
@@ -779,20 +783,19 @@ class TauProcessor:
                     # In this case, it is better to wait for the next frame to move forward with the processing.
                     return
 
-                q = q_all[:, new_indices]
                 self.processed_frame_timestamps.extend(new_frame_timestamps)
 
                 if MODEL is not None:
                     # print("Calcul IK/ID...")
-                    if q is not None and q_all.shape[1] > 2:
+                    if q_all.shape[1] > 2:
                         start_idx = new_indices[0]
                         if start_idx == 0:
-                            start_idx = 2 # Make sure that the previous frames are avalable
+                            start_idx = 2 # Make sure that the previous frames are available
                         end_idx = new_indices[-1]
 
-                        # Compute qdot (one frame late)timestamps_q_all
-                        qdot = (q_all[:, start_idx: end_idx] - q_all[:, start_idx-2: end_idx-2]) / (timestamps_q_all[start_idx: end_idx] - timestamps_q_all[start_idx-2: end_idx-2])
-                        timestamps_qdot = timestamps_q_all[start_idx-1: end_idx-1]
+                        # Compute qdot (one frame late)
+                        qdot = (q_all[:, start_idx: end_idx+1] - q_all[:, start_idx-2: end_idx-1]) / (timestamps_q_all[start_idx: end_idx+1] - timestamps_q_all[start_idx-2: end_idx-1])
+                        timestamps_qdot = timestamps_q_all[start_idx-1: end_idx]
 
                         # Put qdot in database
                         for i_frame in range(qdot.shape[1]):
@@ -812,11 +815,13 @@ class TauProcessor:
                         all_qdot_timestamps = np.array(all_qdot_timestamps)
 
                         start_idx = qdot_indices[0]
+                        if start_idx == 0:
+                            start_idx = 2 # Make sure that the previous frames are available
                         end_idx = qdot_indices[-1]
                         if qdot_all.shape[1] > 2:
                             # Compute qddot (two frames late)
-                            qddot = (qdot_all[:, start_idx: end_idx] - qdot_all[:, start_idx-2: end_idx-2]) / (all_qdot_timestamps[start_idx: end_idx] - all_qdot_timestamps[start_idx-2: end_idx-2])
-                            timestamps_qddot = all_qdot_timestamps[start_idx-1: end_idx-1]
+                            qddot = (qdot_all[:, start_idx: end_idx+1] - qdot_all[:, start_idx-2: end_idx-1]) / (all_qdot_timestamps[start_idx: end_idx+1] - all_qdot_timestamps[start_idx-2: end_idx-1])
+                            timestamps_qddot = all_qdot_timestamps[start_idx-1: end_idx]
                             timestamps_qddot = timestamps_qddot.tolist()
 
                             # Put qddot in database
@@ -836,6 +841,8 @@ class TauProcessor:
 
                             if tau is not None:
                                 # Put tau in database
+                                if isinstance(tau, list) and len(tau) == 0:
+                                    print(tau)
                                 for i_frame in range(tau.shape[1]):
                                     safe_redis_operation(redis_client.rpush, "tau", json.dumps(tau[:, i_frame].tolist()))
                                     safe_redis_operation(redis_client.ltrim, "tau", -FRAME_BUFFER_LENGTH, -1)
@@ -846,22 +853,29 @@ class TauProcessor:
         except Exception as e:
             logging.error(f"Erreur dans TauProcessor : {e}")
 
+    @staticmethod
+    def get_cop(platform_center, force_vec, moment_vec):
+        cop = np.zeros((3, ))
+        cop[0] = -moment_vec[1] / force_vec[2] + platform_center[0]
+        cop[1] = moment_vec[0] / force_vec[2] + platform_center[1]
+        return cop
+
     def inverse_dynamics(self, model: biorbd.Model, force, q, qdot, qddot):
         try:
-            # TODO: verify this step !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             num_contacts = len(force)
             num_frames = force[0].shape[1]
-            platform_origin = [[0.78485, 0.7825, 0.0], [0.78485, 0.2385, 0.0]]  # Not good
+            platform_center = [[0.7345, 0.7691, 0.0], [0.7339, 0.25442, 0.0]]  # See example/get_platform_center.py to see where these values came from
             force_filtered = np.zeros((num_contacts, 3, num_frames))
             moment_filtered = np.zeros((num_contacts, 3, num_frames))
             tau_data = np.zeros((model.nbQ(), num_frames))
 
-            if q.shape[1] != num_frames or qdot.shape[1] != num_frames or qddot.shape[1] != num_frames:
-                return None
+            # if q.shape[1] != num_frames or qdot.shape[1] != num_frames or qddot.shape[1] != num_frames:
+            #     return None, None
 
             for contact_idx in range(num_contacts):
                 force_filtered[contact_idx] = data_filter(force[contact_idx][0:3], 2, MARKER_FREQUENCY, 10)
-                moment_filtered[contact_idx] = data_filter(force[contact_idx][3:6], 4, MARKER_FREQUENCY, 10)
+                # There should not be any moments on the x and y-axis
+                moment_filtered[contact_idx][2, :] = data_filter(force[contact_idx][3:6], 4, MARKER_FREQUENCY, 10)[2, :]
 
             for i in range(num_frames):
                 ext_load = model.externalForceSet()
@@ -871,7 +885,7 @@ class TauProcessor:
                         force_vec = force_filtered[contact_idx, :, i]
                         moment_vec = moment_filtered[contact_idx, :, i] / 1000
                         spatial_vector = np.concatenate((moment_vec, force_vec))
-                        point_app = platform_origin[contact_idx]
+                        point_app = self.get_cop(platform_center[contact_idx], force_vec, moment_vec)
                         segment_name = "LFoot" if contact_idx == 0 else "RFoot"
                         ext_load.add(biorbd.String(segment_name), spatial_vector, np.array(point_app))
 
@@ -881,7 +895,7 @@ class TauProcessor:
             return tau_data, force_filtered
         except Exception as e:
             logging.error(f"Erreur dans inverse_dynamics: {e}")
-            return None
+            return None, None
 
     def stop(self):
         self.running = False
