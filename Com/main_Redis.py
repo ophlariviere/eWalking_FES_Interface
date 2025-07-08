@@ -1465,20 +1465,20 @@ class StimulationProcessor:
             active_channels[:] = self.last_channels[:]
 
             if right == "StartStim":
-                for i_chanel in range(1, 5):
+                for i_chanel in [1, 2]:
                     if i_chanel not in active_channels:
                         active_channels.append(i_chanel)
             elif right == "StopStim":
-                for i_chanel in range(1, 5):
+                for i_chanel in [1, 2]:
                     if i_chanel in active_channels:
                         active_channels.remove(i_chanel)
 
             if left == "StartStim":
-                for i_chanel in range(5, 9):
+                for i_chanel in [5, 6]:
                     if i_chanel not in active_channels:
                         active_channels.append(i_chanel)
             elif left == "StopStim":
-                for i_chanel in range(5, 9):
+                for i_chanel in [5, 6]:
                     if i_chanel in active_channels:
                         active_channels.remove(i_chanel)
 
@@ -2369,8 +2369,8 @@ def main():
     threading.Thread(target=data_receiver.start_receiving, daemon=True).start()
     # threading.Thread(target=data_processor.start_processing, daemon=True).start()
     threading.Thread(target=q_processor.start_processing, daemon=True).start()
-    threading.Thread(target=tau_processor.start_processing, daemon=True).start()
-    # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+    # threading.Thread(target=tau_processor.start_processing, daemon=True).start()
+    threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
     # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
