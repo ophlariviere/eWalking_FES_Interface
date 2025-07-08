@@ -61,7 +61,7 @@ logging.basicConfig(
 )
 
 # Constantes globales
-FRAME_BUFFER_LENGTH = 1000
+FRAME_BUFFER_LENGTH = 2000
 CYCLE_BUFFER_LENGTH = 100
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
@@ -90,6 +90,7 @@ DOF_CORR = {
     "LAnkle": [13],
 }
 NB_DOF = MODEL.nbQ()
+NB_MARKERS = 16
 DEFAULT_BOUNDS = {
     "Amplitude": [0, 100],  # Amplitude en mA
     "Pulse Width": [0, 1000],  # Largeur d'impulsion en microsecondes
@@ -242,8 +243,9 @@ def nan_filtfilt(b, a, data):
                     idx_stop += 1
                     i_nan += 1
 
-            nb_frames_to_fill = idx_stop - (idx_start+1)
-            filtered[idx_start+1: idx_stop] = np.linspace(filtered[idx_start], filtered[idx_stop], nb_frames_to_fill + 2)[1:-1]
+            if idx_stop < data.shape[0]:
+                nb_frames_to_fill = idx_stop - (idx_start+1)
+                filtered[idx_start+1: idx_stop] = np.linspace(filtered[idx_start], filtered[idx_stop], nb_frames_to_fill + 2)[1:-1]
             i_nan += 1
 
     return filtered
@@ -266,9 +268,6 @@ def data_filter(data, order, sampling_rate, cutoff_freq):
                 filtered_data[i, j, :] = nan_filtfilt(b, a, data[i, j, :])
     else:
         raise ValueError("Data must be 2D or 3D.")
-
-    if np.sum(np.isnan(filtered_data)) > 0:
-        raise RuntimeError("Something went wrong, the filtered data still contains nans.")
 
     return filtered_data
 
@@ -905,14 +904,17 @@ class BayesianOptimizer:
     """Traite les données pour determiner quels parametres de stimulation essayer"""
 
     def __init__(self):
+        global MASS, NB_MARKERS, NB_DOF
+
         super().__init__()
         self.running = True
 
-        # self.processed_frame_timestamps = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
+        self.processed_frame_timestamps = deque(maxlen=2 * FRAME_BUFFER_LENGTH)
         # self.processed_cycles = deque(maxlen=2 * CYCLE_BUFFER_LENGTH)
         self.processing_complete = "Not initialized"
         self.current_iteration = None
-        self.current_cycle = None
+        self.cycle_idx = 0
+        self.reintialize_variables()
 
         # Optimization parameters
         # Define the variable bounds
@@ -931,6 +933,18 @@ class BayesianOptimizer:
         self.weight_angular_momentum = 1
         self.weight_enegy = 1
         self.weight_ankle_power = -1
+
+    def reintialize_variables(self):
+        """
+        Initialize the buffers for the data while waiting for the next heel strike
+        """
+        self.q = np.empty((NB_DOF, 0))
+        self.qdot = np.empty((NB_DOF, 0))
+        self.qddot = np.empty((NB_DOF, 0))
+        self.tau = np.empty((NB_DOF, 0))
+        self.forces = np.empty((2, 9, 0))
+        self.markers = np.empty((NB_MARKERS, 3, 0))
+        self.timestamps = np.empty((0, ))
 
     def start_optimizing(self):
         global IS_REDIS_CONNECTED, RUN_OPTIMISATION
@@ -1045,43 +1059,134 @@ class BayesianOptimizer:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
 
     def get_cycle_data(self):
+        global MASS
 
         no_new_data = True
         while no_new_data:
-            cycle_indices = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("cycle_idx", 0, -1)]
-            q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
-            qdot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qdot", 0, -1)]
-            qddot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qddot", 0, -1)]
-            tau_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
-            gait_parameters_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("gait_parameters", 0, -1)]
+            timestamps_q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_q", 0, -1)]
+            timestamps_q_all = np.array(timestamps_q_all)
+            # The timestamps should be from the slowest data to get (usually tau)
+            new_indices, new_frame_timestamps = get_new_indices(timestamps_q_all, self.processed_frame_timestamps, print_option=False)
 
-            if (
-                len(q_all) != len(cycle_indices)
-                or len(qdot_all) != len(cycle_indices)
-                or len(qddot_all) != len(cycle_indices)
-                or len(tau_all) != len(cycle_indices)
-                or len(gait_parameters_all) != len(cycle_indices)
-            ):
-                # We are in a weird state, it is better to wait for the next loop
-                continue
+            if new_frame_timestamps.shape[0] > 0:
+                no_new_data = True
 
-            if len(q_all) > 0 and len(cycle_indices) > 0:
-                if self.current_cycle is None:
-                    self.current_cycle = cycle_indices[0]
-                elif self.current_cycle < cycle_indices[-1]:
-                    self.current_cycle += 1
-                else:
+                mks_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
+                mks_all = np.array(mks_all).transpose(1, 2, 0)
+                forces_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("force", 0, -1)]
+                forces_all = np.array(forces_all).transpose(1, 2, 0)
+                timestamps_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamp", 0, -1)]
+                q_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("q", 0, -1)]
+                q_all = np.array(q_all).T
+                # qdot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qdot", 0, -1)]
+                # qdot_all = np.array(qdot_all).T
+                # timestamps_qdot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_qdot", 0, -1)]
+                # timestamps_qdot_all = np.array(timestamps_qdot_all)
+                # qddot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("qddot", 0, -1)]
+                # qddot_all = np.array(qddot_all).T
+                # timestamps_qddot_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_qddot", 0, -1)]
+                # timestamps_qddot_all = np.array(timestamps_qddot_all)
+                # tau_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("tau", 0, -1)]
+                # tau_all = np.array(tau_all).T
+                # timestamps_tau_all = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("timestamps_tau", 0, -1)]
+                # timestamps_tau_all = np.array(timestamps_tau_all)
+
+                # Get all data at the same timestamp
+                q = q_all[:, new_indices]
+                # qdot_indices = get_indices_of_these_timestamps(new_frame_timestamps, timestamps_qdot_all.tolist())
+                # qdot = qdot_all[:, qdot_indices]
+                # qddot_indices = get_indices_of_these_timestamps(new_frame_timestamps, timestamps_qddot_all.tolist())
+                # qddot = qddot_all[:, qddot_indices]
+                # tau_indices = get_indices_of_these_timestamps(new_frame_timestamps, timestamps_tau_all.tolist())
+                # tau = tau_all[:, tau_indices]
+                markers_indices = get_indices_of_these_timestamps(new_frame_timestamps, timestamps_all)
+                mks = mks_all[:, :, markers_indices]
+                force_indices = get_indices_of_these_timestamps(new_frame_timestamps, timestamps_all)
+                forces = forces_all[:, :, force_indices]
+
+                self.processed_frame_timestamps.extend(new_frame_timestamps)
+
+                if (
+                    q.shape[1] != mks.shape[2]
+                    or q.shape[1] != forces.shape[2]
+                ):
+                    # We are in a weird state, it is better to wait for the next loop
                     continue
 
-                this_cycle_index = cycle_indices.index(self.current_cycle)
-                q = np.array(q_all[this_cycle_index])
-                qdot = np.array(qdot_all[this_cycle_index])
-                qddot = np.array(qddot_all[this_cycle_index])
-                tau = np.array(tau_all[this_cycle_index])
-                gait_parameters = gait_parameters_all[this_cycle_index]
-                no_new_data = False
+                if self.forces.shape[2] < 30:
+                    # The cycle cannot be complete
+                    end_cycle_reached = False
+                    self.q = np.concatenate((self.q, q), axis=1)
+                    # self.qdot = np.concatenate((self.qdot, qdot), axis=1)
+                    # self.qddot = np.concatenate((self.qddot, qddot), axis=1)
+                    # self.tau = np.concatenate((self.tau, tau), axis=1)
+                    self.forces = np.concatenate((self.forces, forces), axis=2)
+                    self.markers = np.concatenate((self.markers, mks), axis=2)
+                    self.timestamps = np.concatenate((self.timestamps, new_frame_timestamps), axis=0)
+                    return end_cycle_reached, None, None, None, None, None
 
-        return q, qdot, qddot, tau, gait_parameters
+
+                force_filtered = data_filter(self.forces, 4, MARKER_FREQUENCY, 10)
+                fyl = force_filtered[0, 1, :]  # Force Y gauche
+                fzr = force_filtered[1, 2, :]  # Force Z droite
+                right_foot_on_ground = fzr > 0.05 * 9.81 * MASS
+                left_foot_propulsion = fyl > - 0.01
+                left_foot_large_weight = fzr > 0.25 * 9.81 * MASS
+                candidate_heel_strike = np.where(np.logical_and(
+                                                np.logical_and(right_foot_on_ground,
+                                                                        left_foot_propulsion),
+                                                      left_foot_large_weight
+                                                    )
+                                                )
+
+                heel_strike = None
+                if candidate_heel_strike[0].shape[0] > 0:
+                    candidate_heel_strike = candidate_heel_strike[0]
+                    if candidate_heel_strike[0] != 0:
+                        heel_strike = candidate_heel_strike[0]
+
+                        # # Identification
+                        # plt.figure()
+                        # plt.plot(force_filtered[1, 2, :], "k")
+                        # plt.plot(force_filtered[0, 2, :], "m")
+                        # plt.axvline(x=heel_strike, color='red', linestyle='--', label='Heel Strike')
+                        # plt.savefig("cycle_identification.png")
+                        # plt.show()
+
+                if heel_strike is None:
+                    end_cycle_reached = False
+                    self.q = np.concatenate((self.q, q), axis=1)
+                    # self.qdot = np.concatenate((self.qdot, qdot), axis=1)
+                    # self.qddot = np.concatenate((self.qddot, qddot), axis=1)
+                    # self.tau = np.concatenate((self.tau, tau), axis=1)
+                    self.forces = np.concatenate((self.forces, forces), axis=2)
+                    self.markers = np.concatenate((self.markers, mks), axis=2)
+                    self.timestamps = np.concatenate((self.timestamps, new_frame_timestamps), axis=0)
+                    return end_cycle_reached, None, None, None, None, None
+                else:
+                    end_cycle_reached = True
+                    self.q = np.concatenate((self.q, q[:, :heel_strike]), axis=1)
+                    # self.qdot = np.concatenate((self.qdot, qdot[:, :heel_strike]), axis=1)
+                    # self.qddot = np.concatenate((self.qddot, qddot[:, :heel_strike]), axis=1)
+                    # self.tau = np.concatenate((self.tau, tau[:, :heel_strike]), axis=1)
+                    self.forces = np.concatenate((self.forces, forces[:, :, :heel_strike]), axis=2)
+                    self.markers = np.concatenate((self.markers, mks[:, :, :heel_strike]), axis=2)
+                    self.timestamps = np.concatenate((self.timestamps, new_frame_timestamps[:heel_strike]), axis=0)
+                    if self.q.shape[1] < 30:
+                        print("Skipping this cycle because too short.")
+                        return end_cycle_reached, None, None, None, None, None
+
+                    else:
+                        self.cycle_idx += 1
+                        mks_name = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks_name", 0, -1)][0]
+                        force_filtered = data_filter(self.forces, 4, MARKER_FREQUENCY, 10)
+                        gait_parameters = compute_gait_parameters(self.timestamps, force_filtered, self.markers, mks_name)
+
+                        safe_redis_operation(redis_client.rpush, "gait_parameters", json.dumps(gait_parameters))
+                        safe_redis_operation(redis_client.ltrim, "gait_parameters", -FRAME_BUFFER_LENGTH, -1)
+
+                        return end_cycle_reached, self.q, None, None, None, gait_parameters
+
 
     def make_an_iteration(self, stimulation_params):
         global START_STIMULATION, STOP_STIMULATOR
@@ -1091,11 +1196,10 @@ class BayesianOptimizer:
         else:
             self.current_iteration += 1
 
-        # Set the parameter values to test this iteration
-        self.set_stimulation_parameters(stimulation_params)
-
-        # Stimulate
-        START_STIMULATION = True
+        # # Set the parameter values to test this iteration
+        # self.set_stimulation_parameters(stimulation_params)
+        # # Stimulate
+        # START_STIMULATION = True
 
         # Collect data while waiting for the subject to get a stable walking pattern with these parameters
         cycles = {
@@ -1113,18 +1217,26 @@ class BayesianOptimizer:
 
         stable = False
         while not stable:
-            q_new, qdot_new, qddot_new, tau_new, gait_parameters_new = self.get_cycle_data()
+
+            # Collect the new data until the end of the cycle is reached
+            new_cycle, q_new, qdot_new, qddot_new, tau_new, gait_parameters_new = self.get_cycle_data()
+            if not new_cycle:
+                continue
+            if q_new is None:
+                # The first cycle might not be complete, so we skip it
+                continue
+            self.reintialize_variables()
 
             cycles["q"] += [q_new]
             cycles["qdot"] += [qdot_new]
             cycles["qddot"] += [qddot_new]
             cycles["tau"] += [tau_new]
-            cycles["cycle_duration"] += gait_parameters_new[0]
-            cycles["stance_duration_R"] += gait_parameters_new[1]
-            cycles["stance_duration_L"] += gait_parameters_new[2]
-            cycles["step_distance_R"] += gait_parameters_new[3]
-            cycles["step_distance_L"] += gait_parameters_new[4]
-            cycles["nb_frames"] += q_new.shape[1]
+            cycles["cycle_duration"] += [gait_parameters_new[0]]
+            cycles["stance_duration_R"] += [gait_parameters_new[1]]
+            cycles["stance_duration_L"] += [gait_parameters_new[2]]
+            cycles["step_distance_R"] += [gait_parameters_new[3]]
+            cycles["step_distance_L"] += [gait_parameters_new[4]]
+            cycles["nb_frames"] += [q_new.shape[1]]
             if len(cycles["q"]) > 10:
                 # Compute the std of the last 10 cycles
                 cycle_duration_std = np.nanstd(cycles["cycle_duration"][-10:])
@@ -1144,8 +1256,8 @@ class BayesianOptimizer:
                 # and step_distance_L_std < 0.05 * np.nanmean(cycles["step_distance_L"][-10:])
                 # )
 
-        # Stop the stimulation
-        STOP_STIMULATOR = True
+        # # Stop the stimulation
+        # STOP_STIMULATOR = True
 
         # Compute the mean cycle
         q_mean, qdot_mean, qddot_mean, tau_mean = self.compute_mean_cycle(cycles)
@@ -2367,11 +2479,10 @@ def main():
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=True).start()
-    # threading.Thread(target=data_processor.start_processing, daemon=True).start()
     threading.Thread(target=q_processor.start_processing, daemon=True).start()
     # threading.Thread(target=tau_processor.start_processing, daemon=True).start()
     threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
-    # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
+    threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
     sys.exit(app.exec_())
