@@ -11,7 +11,7 @@ Note: Always start the interface (this code) before the data server (code on the
 """
 
 import os
-import  pickle
+import pickle
 import datetime
 import sys
 from enum import Enum
@@ -1054,7 +1054,9 @@ class BayesianOptimizer:
             try:
                 safe_redis_operation(redis_client.rpush, "stimulation_parameters", json.dumps(stimulator_parameters))
                 safe_redis_operation(redis_client.ltrim, "stimulation_parameters", -FRAME_BUFFER_LENGTH, -1)
-                logging.info(f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {stimulation_params}")
+                logging.info(
+                    f"Paramètres de stimulation mis à jour par l'optimisation Bayesienne: {stimulation_params}"
+                )
             except Exception as e:
                 logging.error(f"Erreur lors de la mise à jour des paramètres: {e}")
 
@@ -1341,7 +1343,6 @@ class BayesianOptimizer:
 
         return total_cost, detailed_cost
 
-
     def save_optimal_bayesian_parameters(self, result):
         """
         result contains:
@@ -1375,7 +1376,7 @@ class BayesianOptimizer:
         if not os.path.exists(iter_path):
             os.makedirs(iter_path)
 
-        with open(f"{iter_path}/iteration_{self.current_iteration}.pkl", 'wb') as f:
+        with open(f"{iter_path}/iteration_{self.current_iteration}.pkl", "wb") as f:
             data = {
                 "cycles": cycles,
                 "qdq_meanot": q_mean,
@@ -1385,7 +1386,6 @@ class BayesianOptimizer:
                 "stimulation_params": stimulation_params,
             }
             pickle.dump(data, f)
-
 
     def plot_bayesian_optim_results(self, result):
         # TODO
@@ -2269,10 +2269,7 @@ class Interface(QMainWindow):
                     if data == []:
                         continue
                     data = np.array(data).transpose(1, 2, 0)
-                    y_data = [data[0][1, :],
-                              data[0][2, :],
-                              data[1][1, :],
-                              data[1][2, :]]
+                    y_data = [data[0][1, :], data[0][2, :], data[1][1, :], data[1][2, :]]
 
                 elif key == "marker":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
@@ -2342,9 +2339,7 @@ class Interface(QMainWindow):
                 if key == "q":
                     data = data * 180 / np.pi
 
-                y_data = [data[DOF_CORR["LHip"][0], :],
-                          data[DOF_CORR["LAnkle"][0], :],
-                          data[DOF_CORR["LKnee"][0], :]]
+                y_data = [data[DOF_CORR["LHip"][0], :], data[DOF_CORR["LAnkle"][0], :], data[DOF_CORR["LKnee"][0], :]]
 
             elif key == "gait_params" or key == "stim_params" or key == "cost":
                 if key == "gait_params":
