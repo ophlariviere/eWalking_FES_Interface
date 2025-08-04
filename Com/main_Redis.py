@@ -308,80 +308,99 @@ class DataReceiver:
                         received_data = self.tcp_client.get_data_from_server(
                             command=["timestamp", "force", "mks", "mks_name"]
                         )
+                        if received_data is None:
+                            # The pusher computer was not ready to send data
+                            continue
 
+                        if isinstance(received_data["timestamp"], np.float64):
+                            timestamp = np.array([received_data["timestamp"]])
+                        else:
+                            timestamp = np.array([m for m in received_data["timestamp"]])
                         # Reformat data because pickle (in the tcp server) does not support numpy arrays
-                        markers_frame = np.array([m for m in received_data["mks"]])
-
+                        markers = np.array([m for m in received_data["mks"]])
+                        nb_frames = timestamp.shape[0]
+                        if nb_frames != markers.shape[2]:
+                            raise RuntimeError("Something wierd happened, the number of frames is not consistent.")
+                        force_0 = np.array([f for f in received_data["force"][0]])
+                        force_1 = np.array([f for f in received_data["force"][1]])
+                        forces = np.array([force_0, force_1])
                         there_are_no_forces = (
                             len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
                         )
                         if there_are_no_forces:
-                            if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
-                                raise RuntimeError(
-                                    "This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces."
-                                )
+                            continue  # TODO : see what to do with this weird case
+                        nb_frames_forces = forces.shape[2]
+                        approx_nb_frames_forces = nb_frames_forces//nb_frames
+                        frames_to_keep = [range(approx_nb_frames_forces * i, approx_nb_frames_forces * (i+1)) for i in range(nb_frames)]
 
-                            mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
-                            forces = np.ones((2, 9, 40))
-                            forces[:, :, :] = np.nan
+                        for i_frame in range(timestamp.shape[0]):
+                            markers_this_frame = markers[:, :, i_frame]
+                            forces_this_frame = forces[:, :, frames_to_keep[i_frame]]
 
-                        else:
-                            force_0 = np.array([f for f in received_data["force"][0]])
-                            force_1 = np.array([f for f in received_data["force"][1]])
-                            forces = np.array([force_0, force_1])
+                            # if there_are_no_forces:
+                            #     if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
+                            #         raise RuntimeError(
+                            #             "This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces."
+                            #         )
+                            #
+                            #     mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
+                            #     forces = np.ones((2, 9, 40))
+                            #     forces[:, :, :] = np.nan
+                            #
+                            # else:
+                            #     if PRINT_FREQUENCY:
+                            #         NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
+                            #         if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                            #             TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                            #             elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                            #             print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                            #             TIC_FORCE_DATA = TOC_FORCE_DATA
+                            #             NUMBER_OF_FORCE_DATA = 0
+                            #
+                            mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
+
+                            # if float(np.nansum(markers_this_frame)) == 0.0:
+                            #     # print("skipping - All markers are NaNs")
+                            #     continue
+                            # elif np.all(markers_this_frame == last_marker_frame):
+                            #     # print("skipping - Not a new frame")
+                            #     continue
+
+                            """ Data markers """
+                            if self.mks_name is None:
+                                self.mks_name = received_data["mks_name"]
+                                safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
+                                safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
+
+                            # Créer un identifiant unique (timestamp + compteur)
+                            self.frame_counter += 1
                             if PRINT_FREQUENCY:
-                                NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                                if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                                    TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                                    elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                                    print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                                    TIC_FORCE_DATA = TOC_FORCE_DATA
-                                    NUMBER_OF_FORCE_DATA = 0
+                                if self.frame_counter % 100 == 0:
+                                    TOC_MARKER_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                    elapsed_time = TOC_MARKER_DATA - TIC_MARKER_DATA
+                                    print(
+                                        f"Frame Counter: {self.frame_counter}",
+                                        "  ----  ",
+                                        100 / elapsed_time,
+                                        " Hz",
+                                    )
+                                    TIC_MARKER_DATA = TOC_MARKER_DATA
 
-                            mean_forces_this_frame = np.nanmean(forces[:, :, :20], axis=2)
+                            # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
+                            safe_redis_operation(redis_client.rpush, "timestamp", int(timestamp[i_frame]))
+                            safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
 
-                        if float(np.nansum(markers_frame)) == 0.0:
-                            # print("skipping - All markers are NaNs")
-                            continue
-                        elif np.all(markers_frame == last_marker_frame):
-                            # print("skipping - Not a new frame")
-                            continue
+                            safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_this_frame.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
 
-                        """ Data markers """
-                        if self.mks_name is None:
-                            self.mks_name = received_data["mks_name"]
-                            safe_redis_operation(redis_client.rpush, "mks_name", json.dumps(self.mks_name))
-                            safe_redis_operation(redis_client.ltrim, "mks_name", -FRAME_BUFFER_LENGTH, -1)
+                            safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
+                            safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
 
-                        # Créer un identifiant unique (timestamp + compteur)
-                        self.frame_counter += 1
-                        if PRINT_FREQUENCY:
-                            if self.frame_counter % 1000 == 0:
-                                TOC_MARKER_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                                elapsed_time = TOC_MARKER_DATA - TIC_MARKER_DATA
-                                print(
-                                    f"Frame Counter: {self.frame_counter}",
-                                    "  ----  ",
-                                    100 / elapsed_time,
-                                    " Hz",
-                                )
-                                TIC_MARKER_DATA = TOC_MARKER_DATA
+                            self.data_received = "Data received successfully"
 
-                        # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
-                        safe_redis_operation(redis_client.rpush, "timestamp", received_data["timestamp"])
-                        safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
-
-                        safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_frame.tolist()))
-                        safe_redis_operation(redis_client.ltrim, "mks", -FRAME_BUFFER_LENGTH, -1)
-
-                        safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
-                        safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-
-                        self.data_received = "Data received successfully"
-
-                        # Flush the forces_this_frame buffer for the next frame
-                        last_marker_frame = markers_frame
-                        last_force_frame = forces
+                            # Flush the forces_this_frame buffer for the next frame
+                            last_marker_frame = markers_this_frame
+                            last_force_frame = forces_this_frame
 
                 except Exception as e:
                     logging.error(f"Erreur dans DataReceiver: {e}")
@@ -2461,23 +2480,23 @@ def main():
     # Data receiver (goal: interaction with Qualisys)
     data_receiver = DataReceiver(server_ip, server_port)
 
-    # Data processor (goal: ID, IK)
-    # data_processor = DataProcessor()
-    q_processor = QProcessor()
-    tau_processor = TauProcessor()
-
-    # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
-    stimulation_processor = StimulationProcessor()
-
-    # Bayesian optimizer (goal: determine which stimulation parameters to try)
-    bayesian_optimizer = BayesianOptimizer()
+    # # Data processor (goal: ID, IK)
+    # # data_processor = DataProcessor()
+    # q_processor = QProcessor()
+    # tau_processor = TauProcessor()
+    #
+    # # Stimulation processor (goal: determine if a stim is needed + interaction with stimulator)
+    # stimulation_processor = StimulationProcessor()
+    #
+    # # Bayesian optimizer (goal: determine which stimulation parameters to try)
+    # bayesian_optimizer = BayesianOptimizer()
 
     # --- Thread activation --- #
     threading.Thread(target=data_receiver.start_receiving, daemon=True).start()
-    threading.Thread(target=q_processor.start_processing, daemon=True).start()
+    # threading.Thread(target=q_processor.start_processing, daemon=True).start()
     # threading.Thread(target=tau_processor.start_processing, daemon=True).start()
-    threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
-    threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
+    # threading.Thread(target=stimulation_processor.start_processing, daemon=False).start()
+    # threading.Thread(target=bayesian_optimizer.start_optimizing, daemon=False).start()
 
     # Start the GUI
     sys.exit(app.exec_())
