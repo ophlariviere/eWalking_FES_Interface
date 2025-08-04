@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from time import sleep
 import socket
+import queue
 
 
 def test_server_connection():
@@ -31,9 +32,11 @@ TIC_FORCE_DATA = 0
 FRAME_COUNTER = 0
 TIC_MARKER_DATA = 0
 
+DATA_BUFFER = None
+
 
 SERVER = Server(SERVER_IP, SERVER_PORT)
-SERVER.start()
+SERVER.start(blocking=False)
 test_server_connection()
 sleep(1)
 ACQUISITION_RATE = SERVER.acquisition_rate
@@ -45,8 +48,8 @@ def format_data(frame_number, header, markers, forces):
 
     # Header
     data_all = {}
-    data_all["frame"] = frame_number
-    data_all["header"] = header
+    data_all["frame"] = np.array([frame_number])
+    # data_all["header"] = header
     data_all["mks_name"] = MARKER_NAMES
 
     # Organize force data
@@ -58,17 +61,43 @@ def format_data(frame_number, header, markers, forces):
 
     # Organize marker data
     data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers]) / 1000
+    data_all["mks"] = data_all["mks"][:, :, np.newaxis]
 
-    data_all["timestamp"] = datetime.timestamp(datetime.now())
+    data_all["timestamp"] = np.array([datetime.timestamp(datetime.now())])
 
     return data_all
 
 
-def send_data_to_server(data_all):
-    connection, message = SERVER.client_listening()  # If the client (other computer) is not listening, this is blocking
-    if connection:
-        SERVER.send_data(data_all, connection, message)
+# def send_data_to_server(data_all):
+#     connection, message = SERVER.client_listening()  # If the client (other computer) is not listening, this is blocking
+#     if connection:
+#         SERVER.send_data(data_all, connection, message)
 
+def append_data_buffer(data_all):
+    global DATA_BUFFER
+    if DATA_BUFFER is None:
+        DATA_BUFFER = data_all
+    else:
+        for key in DATA_BUFFER.keys():
+            if key == "mks_name":
+                continue
+            else:
+                if data_all[key].size != 0:
+                    DATA_BUFFER[key] = np.concatenate((DATA_BUFFER[key], data_all[key]), axis=-1)
+def send_data_to_server_non_blocking(data_all):
+    global DATA_BUFFER, FRAME_COUNTER
+    connection, message = SERVER.client_listening_non_blocking()
+    if connection is None:
+        append_data_buffer(data_all)
+    else:
+        append_data_buffer(data_all)
+        try:
+            SERVER.send_data(DATA_BUFFER, connection, message)
+        except:
+            return
+        DATA_BUFFER = None
+        FRAME_COUNTER += 1
+        return
 
 def on_packet(packet):
     """Callback function that is called everytime a data packet arrives from QTM"""
@@ -96,7 +125,6 @@ def on_packet(packet):
             TIC_FORCE_DATA = TOC
             NUMBER_OF_FORCE_DATA = 0
 
-        FRAME_COUNTER += 1
         if FRAME_COUNTER % 100 == 0:
             TOC = datetime.timestamp(datetime.now())
             elapsed_time = TOC - TIC_MARKER_DATA
@@ -105,7 +133,7 @@ def on_packet(packet):
             FRAME_COUNTER = 0
 
     # Actually send the data to the TCP server
-    send_data_to_server(data_all)
+    send_data_to_server_non_blocking(data_all)
 
 
 async def get_marker_names(connection):
