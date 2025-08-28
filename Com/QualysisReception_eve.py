@@ -42,7 +42,7 @@ ACQUISITION_RATE = SERVER.acquisition_rate
 print("Acquisition rate : ", SERVER.acquisition_rate)
 
 
-def format_data(frame_number, header, markers, forces):
+def format_data(frame_number, markers, forces):
     global MARKER_NAMES
 
     # Header
@@ -61,6 +61,8 @@ def format_data(frame_number, header, markers, forces):
         data_all["force"] = np.empty((2, 9, 0))
     else:
         data_all["force"] = np.array(force_array)  # shape = (2, 9, nb_frames)
+        if np.all(np.isnan(data_all["force"])):
+            data_all["force"] = np.empty((2, 9, 0))
 
     # Organize marker data
     data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers]) / 1000
@@ -103,11 +105,11 @@ def on_packet(packet):
 
     # Get the data
     frame_number = packet.framenumber
-    header, markers = packet.get_3d_markers()
+    _, markers = packet.get_3d_markers()
     _, forces = packet.get_force()
 
     # Format data in a readable way
-    data_all = format_data(frame_number, header, markers, forces)
+    data_all = format_data(frame_number, markers, forces)
 
     if forces[0][0].force_number != 0:
         NUMBER_OF_FORCE_DATA += data_all["force"].shape[2]
