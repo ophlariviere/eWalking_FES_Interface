@@ -6,7 +6,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from time import sleep
 import socket
-import queue
 
 
 def test_server_connection():
@@ -43,21 +42,27 @@ ACQUISITION_RATE = SERVER.acquisition_rate
 print("Acquisition rate : ", SERVER.acquisition_rate)
 
 
-def format_data(frame_number, header, markers, forces):
+def format_data(frame_number, markers, forces):
     global MARKER_NAMES
 
     # Header
     data_all = {}
     data_all["frame"] = np.array([frame_number])
-    # data_all["header"] = header
     data_all["mks_name"] = MARKER_NAMES
 
     # Organize force data
     force_array = []
     for plate, force in forces:
         plate_data = [[f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a] for f in force]
-        force_array.append(np.array(plate_data).T)
-    data_all["force"] = np.array(force_array)  # shape = (2, 9, nb_frames)
+        this_force = np.array(plate_data).T
+        if this_force.size != 0:
+            force_array.append(this_force)
+    if len(force_array) == 0:
+        data_all["force"] = np.empty((2, 9, 0))
+    else:
+        data_all["force"] = np.array(force_array)  # shape = (2, 9, nb_frames)
+        if np.all(np.isnan(data_all["force"])):
+            data_all["force"] = np.empty((2, 9, 0))
 
     # Organize marker data
     data_all["mks"] = np.array([[p.x, p.y, p.z] for p in markers]) / 1000
@@ -68,11 +73,6 @@ def format_data(frame_number, header, markers, forces):
     return data_all
 
 
-# def send_data_to_server(data_all):
-#     connection, message = SERVER.client_listening()  # If the client (other computer) is not listening, this is blocking
-#     if connection:
-#         SERVER.send_data(data_all, connection, message)
-
 def append_data_buffer(data_all):
     global DATA_BUFFER
     if DATA_BUFFER is None:
@@ -82,15 +82,13 @@ def append_data_buffer(data_all):
             if key == "mks_name":
                 continue
             else:
-                if data_all[key].size != 0:
-                    DATA_BUFFER[key] = np.concatenate((DATA_BUFFER[key], data_all[key]), axis=-1)
+                DATA_BUFFER[key] = np.concatenate((DATA_BUFFER[key], data_all[key]), axis=-1)
+
 def send_data_to_server_non_blocking(data_all):
     global DATA_BUFFER, FRAME_COUNTER
     connection, message = SERVER.client_listening_non_blocking()
-    if connection is None:
-        append_data_buffer(data_all)
-    else:
-        append_data_buffer(data_all)
+    append_data_buffer(data_all)
+    if connection is not None:
         try:
             SERVER.send_data(DATA_BUFFER, connection, message)
         except:
@@ -107,11 +105,11 @@ def on_packet(packet):
 
     # Get the data
     frame_number = packet.framenumber
-    header, markers = packet.get_3d_markers()
+    _, markers = packet.get_3d_markers()
     _, forces = packet.get_force()
 
     # Format data in a readable way
-    data_all = format_data(frame_number, header, markers, forces)
+    data_all = format_data(frame_number, markers, forces)
 
     if forces[0][0].force_number != 0:
         NUMBER_OF_FORCE_DATA += data_all["force"].shape[2]
@@ -158,48 +156,9 @@ async def setup_stream_frames():
     await connection.stream_frames(components=["3d", "force"], on_packet=on_packet)
 
 
-async def setup_get_current_frame():
-    global ACQUISITION_RATE
-
-    print("setup_get_current_frame")
-
-    connection = await qtm_rt.connect(QUALISYS_IP)
-    if connection is None:
-        print("No connection")
-        return
-
-    await get_marker_names(connection)
-
-    start_time = asyncio.get_event_loop().time()  # Démarre le timer
-    while True:
-
-        # Récupère le paquet dès qu'il est disponible
-        packet = await connection.get_current_frame(components=["3d", "force"])
-
-        # Si aucun paquet n'est reçu, passe au suivant
-        if not packet:
-            continue
-
-        try:
-            on_packet(packet)
-
-            # Timer pour maintenir la boucle à 100 Hz
-            elapsed_time = asyncio.get_event_loop().time() - start_time
-            sleep_time = 1 / ACQUISITION_RATE - elapsed_time
-            if sleep_time < 0:
-                raise RuntimeError("The code is too slow for the acquisition rate")
-            await asyncio.sleep(sleep_time)
-
-            start_time = asyncio.get_event_loop().time()  # Démarre le timer
-        except:
-            continue  # Passe au paquet suivant sans arrêter le programme
-
-
 if __name__ == "__main__":
 
-    # MODE = "stream_frames"
-    # asyncio.ensure_future(setup_stream_frames())
-    # asyncio.get_event_loop().run_forever()
+    MODE = "stream_frames"
+    asyncio.ensure_future(setup_stream_frames())
+    asyncio.get_event_loop().run_forever()
 
-    MODE = "get_current_frame"
-    asyncio.run(setup_get_current_frame())
