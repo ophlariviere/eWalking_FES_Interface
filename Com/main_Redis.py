@@ -383,7 +383,7 @@ class DataReceiver:
                                     TIC_MARKER_DATA = TOC_MARKER_DATA
 
                             # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
-                            safe_redis_operation(redis_client.rpush, "timestamp", int(timestamp[i_frame]))
+                            safe_redis_operation(redis_client.rpush, "timestamp", float(timestamp[i_frame]))
                             safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_this_frame.tolist()))
@@ -391,7 +391,6 @@ class DataReceiver:
 
                             safe_redis_operation(redis_client.rpush, "force", json.dumps(mean_forces_this_frame.tolist()))
                             safe_redis_operation(redis_client.ltrim, "force", -FRAME_BUFFER_LENGTH, -1)
-                            print(mean_forces_this_frame)
 
                             self.data_received = "Data received successfully"
 
@@ -2285,7 +2284,7 @@ class Interface(QMainWindow):
                     if data == []:
                         continue
                     data = np.array(data).transpose(1, 2, 0)
-                    y_data = [data[0][1, :], data[0][2, :], data[1][1, :], data[1][2, :]]
+                    y_data = [data[0][4, :], data[0][5, :], data[1][4, :], data[1][5, :]]
 
                 elif key == "marker":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
