@@ -324,11 +324,7 @@ class DataReceiver:
                         force_0 = np.array([f for f in received_data["force"][0]])
                         force_1 = np.array([f for f in received_data["force"][1]])
                         forces = np.array([force_0, force_1])
-                        there_are_no_forces = (
-                            len(received_data["force"][0]) == 0 and len(received_data["force"][1]) == 0
-                        )
-                        if there_are_no_forces:
-                            continue  # TODO : see what to do with this weird case
+
                         nb_frames_forces = forces.shape[2]
                         approx_nb_frames_forces = nb_frames_forces//nb_frames
                         frames_to_keep = [range(approx_nb_frames_forces * i, approx_nb_frames_forces * (i+1)) for i in range(nb_frames)]
@@ -337,27 +333,27 @@ class DataReceiver:
                             markers_this_frame = markers[:, :, i_frame]
                             forces_this_frame = forces[:, :, frames_to_keep[i_frame]]
 
-                            # if there_are_no_forces:
-                            #     if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
-                            #         raise RuntimeError(
-                            #             "This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces."
-                            #         )
-                            #
-                            #     mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
-                            #     forces = np.ones((2, 9, 40))
-                            #     forces[:, :, :] = np.nan
-                            #
-                            # else:
-                            #     if PRINT_FREQUENCY:
-                            #         NUMBER_OF_FORCE_DATA += received_data["force"][0].shape[1]
-                            #         if NUMBER_OF_FORCE_DATA % 1000 == 0:
-                            #             TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
-                            #             elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
-                            #             print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
-                            #             TIC_FORCE_DATA = TOC_FORCE_DATA
-                            #             NUMBER_OF_FORCE_DATA = 0
-                            #
-                            mean_forces_this_frame = np.nanmean(forces_this_frame, axis=2)
+                            all_forces_are_nans = np.all(np.isnan(forces_this_frame))
+
+                            if all_forces_are_nans:
+                                if last_force_frame.shape[2] < 38 and last_force_frame.shape[2] > 42:
+                                    raise RuntimeError(
+                                        "This code was hacked knowing that there are always 39 or 40 forces per frame and that on frame out of two do not have any forces."
+                                    )
+
+                                mean_forces_this_frame = np.nanmean(last_force_frame[:, :, 20:], axis=2)
+
+                            else:
+                                if PRINT_FREQUENCY:
+                                    NUMBER_OF_FORCE_DATA += forces_this_frame.shape[2]
+                                    if NUMBER_OF_FORCE_DATA % 1000 == 0:
+                                        TOC_FORCE_DATA = datetime.datetime.timestamp(datetime.datetime.now())
+                                        elapsed_time = TOC_FORCE_DATA - TIC_FORCE_DATA
+                                        print(elapsed_time, "  ----  ", NUMBER_OF_FORCE_DATA / elapsed_time, " Hz")
+                                        TIC_FORCE_DATA = TOC_FORCE_DATA
+                                        NUMBER_OF_FORCE_DATA = 0
+
+                                mean_forces_this_frame = np.nanmean(forces_this_frame[:, :, :20], axis=2)
 
                             # if float(np.nansum(markers_this_frame)) == 0.0:
                             #     # print("skipping - All markers are NaNs")
@@ -387,7 +383,7 @@ class DataReceiver:
                                     TIC_MARKER_DATA = TOC_MARKER_DATA
 
                             # Stocker le timestamp de la mesure puisque la frequence d'acquisition fluctue
-                            safe_redis_operation(redis_client.rpush, "timestamp", int(timestamp[i_frame]))
+                            safe_redis_operation(redis_client.rpush, "timestamp", float(timestamp[i_frame]))
                             safe_redis_operation(redis_client.ltrim, "timestamp", -FRAME_BUFFER_LENGTH, -1)
 
                             safe_redis_operation(redis_client.rpush, "mks", json.dumps(markers_this_frame.tolist()))
@@ -2288,7 +2284,7 @@ class Interface(QMainWindow):
                     if data == []:
                         continue
                     data = np.array(data).transpose(1, 2, 0)
-                    y_data = [data[0][1, :], data[0][2, :], data[1][1, :], data[1][2, :]]
+                    y_data = [data[0][4, :], data[0][5, :], data[1][4, :], data[1][5, :]]
 
                 elif key == "marker":
                     data = [json.loads(x.decode("utf-8")) for x in redis_client.lrange("mks", 0, -1)]
