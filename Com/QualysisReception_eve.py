@@ -53,7 +53,9 @@ def format_data(frame_number, markers, forces):
     # Organize force data
     force_array = []
     for plate, force in forces:
-        plate_data = [[f.x, f.y, f.z, f.x_m, f.y_m, f.z_m, f.x_a, f.y_a, f.z_a] for f in force]
+        plate_data = []
+        for f in force:
+            plate_data += [[f.x_m, f.y_m, f.z_m, f.x, f.y, f.z, f.x_a, f.y_a, f.z_a]]
         this_force = np.array(plate_data).T
         if this_force.size != 0:
             force_array.append(this_force)
@@ -86,15 +88,17 @@ def append_data_buffer(data_all):
 
 def send_data_to_server_non_blocking(data_all):
     global DATA_BUFFER, FRAME_COUNTER
-    connection, message = SERVER.client_listening_non_blocking()
+    connection, message = SERVER.client_listening_non_blocking(timeout=0.01)
+    # Append the data buffer in all cases
     append_data_buffer(data_all)
-    if connection is not None:
+    if connection is not None:  # If the pulling computer is ready, connection is not None
         try:
             SERVER.send_data(DATA_BUFFER, connection, message)
+            # If the data was sent successfully, start a new buffer
+            FRAME_COUNTER += DATA_BUFFER["mks"].shape[2]
+            DATA_BUFFER = None
         except:
             return
-        DATA_BUFFER = None
-        FRAME_COUNTER += 1
         return
 
 def on_packet(packet):
@@ -123,7 +127,7 @@ def on_packet(packet):
             TIC_FORCE_DATA = TOC
             NUMBER_OF_FORCE_DATA = 0
 
-        if FRAME_COUNTER % 100 == 0:
+        if FRAME_COUNTER > 100:
             TOC = datetime.timestamp(datetime.now())
             elapsed_time = TOC - TIC_MARKER_DATA
             print(" Markers  -----  ", FRAME_COUNTER / elapsed_time, " Hz")
