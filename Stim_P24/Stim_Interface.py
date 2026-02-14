@@ -16,7 +16,7 @@ import sys
 import logging
 import biorbd
 from pysciencemode import Device, Modes, Channel
-from pysciencemode import RehastimP24 as St
+from pysciencemode import P24 as St
 
 
 # Configurer le logging
@@ -311,7 +311,7 @@ class StimInterfaceWidget(QWidget):
                     pulse_width=params["pulse_width"],
                     frequency=params["frequency"],
                     mode=Modes.SINGLE,
-                    device_type=Device.Rehastimp24,
+                    device_type=Device.P24,
                 )
                 for channel, params in self.stimulator_parameters.items()
             ]
